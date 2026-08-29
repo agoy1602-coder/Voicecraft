@@ -1,0 +1,180 @@
+export type ToneType =
+  | 'calm'
+  | 'deep'
+  | 'slow'
+  | 'introspective'
+  | 'funny'
+  | 'professional'
+  | 'dramatic'
+  | 'whispering'
+  | 'energetic';
+
+export type SupportedLanguage =
+  | 'en-US'
+  | 'en-GB'
+  | 'es-ES'
+  | 'fr-FR'
+  | 'de-DE'
+  | 'it-IT'
+  | 'ja-JP'
+  | 'zh-CN'
+  | 'pt-BR'
+  | 'ar-SA'
+  | 'hi-IN'
+  | 'ko-KR'
+  | 'ru-RU'
+  | 'nl-NL';
+
+export type PrebuiltVoice = 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr';
+
+export type ExportFormat = 'wav' | 'mp3' | 'aac' | 'ogg' | 'webm' | 'srt' | 'vtt';
+
+export interface VoiceProfile {
+  id: string;
+  name: string;
+  type: 'prebuilt' | 'cloned';
+  gender: 'masculine' | 'feminine' | 'neutral';
+  tone: ToneType;
+  baseVoice?: PrebuiltVoice;
+  description: string;
+  avatarColor: string;
+  pitchShift: number; // -5 to +5
+  speedFactor: number; // 0.5 to 2.0
+  warmth: number; // 0 to 1
+  breathiness: number; // 0 to 1
+  sampleAudioUrl?: string;
+  createdAt: number;
+}
+
+export interface ClonedVoiceProfile extends VoiceProfile {
+  type: 'cloned';
+  basePitchHz: number;
+  timbreDescription: string;
+  promptModifier: string;
+  sampleDuration: number;
+  acousticFingerprint?: number[];
+  notes?: string;
+}
+
+export interface AudioSentence {
+  text: string;
+  startSec: number;
+  endSec: number;
+}
+
+export interface AudioClip {
+  id: string;
+  title: string;
+  text: string;
+  voiceId: string;
+  voiceName: string;
+  voiceType: 'prebuilt' | 'cloned';
+  tone: ToneType;
+  language: SupportedLanguage;
+  durationSeconds: number;
+  audioBlobUrl: string;
+  audioBase64?: string; // Stored encrypted
+  format: string;
+  sampleRate: number;
+  sentences: AudioSentence[];
+  isOfflineGenerated: boolean;
+  createdAt: number;
+  isFavorite: boolean;
+  encryptedSyncId?: string;
+  synced: boolean;
+  tags: string[];
+  playlistId?: string;
+  playlistTitle?: string;
+  playlistIndex?: number;
+  isMergedProject?: boolean;
+}
+
+export interface ProjectTextBlock {
+  id: string;
+  title: string;
+  text: string;
+  voiceId?: string; // Override or inherits default
+  voiceName?: string;
+  tone?: ToneType;
+  speed?: number;
+  pitch?: number;
+  warmth?: number;
+  breathiness?: number;
+  status: 'pending' | 'synthesizing' | 'completed' | 'error';
+  progress?: number;
+  error?: string;
+  clipId?: string;
+  clip?: AudioClip;
+}
+
+export interface ProjectPlaylist {
+  id: string;
+  title: string;
+  description?: string;
+  defaultVoiceId: string;
+  defaultVoiceName: string;
+  defaultTone: ToneType;
+  defaultLanguage: SupportedLanguage;
+  gapSeconds: number; // Pause between blocks (e.g. 0.8s)
+  blocks: ProjectTextBlock[];
+  totalDurationSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+  mergedClipId?: string;
+  mergedClip?: AudioClip;
+}
+
+export interface LinkedDevice {
+  deviceId: string;
+  userId: string;
+  deviceName: string;
+  deviceType: 'ios' | 'android' | 'desktop' | 'tablet';
+  lastSeen: number;
+  ipMasked: string;
+  appVersion: string;
+}
+
+export interface EncryptionStatus {
+  isEnabled: boolean;
+  isLocked: boolean;
+  keyFingerprint: string;
+  cipherAlgorithm: string;
+  lastRotated: number;
+}
+
+export interface FeedbackSubmission {
+  id: string;
+  rating: number; // 1-5
+  category: 'audio_quality' | 'pronunciation' | 'tone_accuracy' | 'voice_cloning' | 'offline_mode' | 'feature_request';
+  message: string;
+  audioClipId?: string;
+  telemetry?: {
+    browser: string;
+    offlineMode: boolean;
+    latencyMs: number;
+    voiceUsed: string;
+  };
+  createdAt: number;
+}
+
+export interface AppNotification {
+  id: string;
+  title: string;
+  message: string;
+  type: 'render_complete' | 'sync_success' | 'security_alert' | 'device_paired' | 'offline_status';
+  timestamp: number;
+  read: boolean;
+  actionUrl?: string;
+}
+
+export interface UserSettings {
+  darkMode: boolean;
+  defaultLanguage: SupportedLanguage;
+  defaultTone: ToneType;
+  defaultVoice: string;
+  autoCloudSync: boolean;
+  pushNotificationsEnabled: boolean;
+  e2eeEnabled: boolean;
+  offlineFallbackEnabled: boolean;
+  audioQuality: 'standard' | 'high' | 'ultra_lossless';
+}
