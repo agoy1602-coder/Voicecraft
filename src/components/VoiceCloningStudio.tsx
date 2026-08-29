@@ -1,6 +1,8 @@
 import React, { useRef, useState } from 'react';
 import {
   Mic,
+  MicOff,
+  AlertTriangle,
   Square,
   Upload,
   Sparkles,
@@ -12,6 +14,7 @@ import {
   ShieldCheck,
   User,
   Info,
+  ExternalLink,
 } from 'lucide-react';
 import { ClonedVoiceProfile } from '../types';
 import { voiceCloneService } from '../services/voiceCloneService';
@@ -21,6 +24,8 @@ interface VoiceCloningStudioProps {
   onAddClonedVoice: (voice: ClonedVoiceProfile) => void;
   onDeleteClonedVoice: (id: string) => void;
   onSelectForTTS: (voice: ClonedVoiceProfile) => void;
+  sampleDuration?: number;
+  onOpenSettings?: () => void;
 }
 
 export const VoiceCloningStudio: React.FC<VoiceCloningStudioProps> = ({
@@ -28,6 +33,8 @@ export const VoiceCloningStudio: React.FC<VoiceCloningStudioProps> = ({
   onAddClonedVoice,
   onDeleteClonedVoice,
   onSelectForTTS,
+  sampleDuration = 5,
+  onOpenSettings,
 }) => {
   const [activeMode, setActiveMode] = useState<'record' | 'upload'>('record');
   const [voiceName, setVoiceName] = useState<string>('');
@@ -39,17 +46,27 @@ export const VoiceCloningStudio: React.FC<VoiceCloningStudioProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [analysisStatus, setAnalysisStatus] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [micBlocked, setMicBlocked] = useState<boolean>(false);
+  const [blockedErrorDetail, setBlockedErrorDetail] = useState<string>('');
 
   const fftCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const recordingTimerRef = useRef<any>(null);
 
-  // Start Mic Recording with real-time FFT Spectrum
+  // Start Mic Recording with explicit getUserMedia call and real-time FFT Spectrum
   const handleStartRecording = async () => {
     try {
       setErrorMessage('');
+      setMicBlocked(false);
+      setBlockedErrorDetail('');
       setRecordedBlob(null);
       setRecordedBase64('');
       setRecordingTime(0);
+
+      // Explicitly trigger navigator.mediaDevices.getUserMedia({ audio: true })
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Microphone audio capture is not supported in this browser.');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
       await voiceCloneService.startRecording((fftData) => {
         const canvas = fftCanvasRef.current;
@@ -71,21 +88,31 @@ export const VoiceCloningStudio: React.FC<VoiceCloningStudioProps> = ({
           ctx.fillStyle = grad;
           ctx.fillRect(x, y, barWidth - 1, barHeight);
         }
-      });
+      }, stream);
 
       setIsRecording(true);
 
       recordingTimerRef.current = setInterval(() => {
         setRecordingTime((t) => {
-          if (t >= 7) {
+          if (t >= sampleDuration) {
             handleStopRecording();
-            return 7;
+            return sampleDuration;
           }
           return t + 1;
         });
       }, 1000);
     } catch (err: any) {
-      setErrorMessage('Microphone access denied or not available. Please allow mic permissions.');
+      const isDenied =
+        err.name === 'NotAllowedError' ||
+        err.name === 'PermissionDeniedError' ||
+        err.name === 'SecurityError';
+      setMicBlocked(true);
+      setBlockedErrorDetail(
+        isDenied
+          ? 'Microphone permission was blocked or denied by browser security policy.'
+          : (err.message || 'Microphone hardware unavailable.')
+      );
+      setErrorMessage('Microphone access blocked. Please allow mic permissions to record.');
     }
   };
 
@@ -97,7 +124,7 @@ export const VoiceCloningStudio: React.FC<VoiceCloningStudioProps> = ({
     setIsRecording(false);
 
     try {
-      const { blob, base64 } = await voiceCloneService.stopRecording();
+      const { blob, base64 } = await voiceCloneService.stopRecording(sampleDuration);
       setRecordedBlob(blob);
       setRecordedBase64(base64);
     } catch {
@@ -223,7 +250,7 @@ export const VoiceCloningStudio: React.FC<VoiceCloningStudioProps> = ({
                   {!isRecording && !recordedBlob && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 text-xs">
                       <WaveIcon className="w-6 h-6 mb-1 opacity-50" />
-                      <span>Press record and speak for 5 seconds</span>
+                      <span>Press record and speak for {sampleDuration} seconds</span>
                     </div>
                   )}
                   {recordedBlob && !isRecording && (
@@ -233,6 +260,69 @@ export const VoiceCloningStudio: React.FC<VoiceCloningStudioProps> = ({
                     </div>
                   )}
                 </div>
+
+                {/* Inline Microphone Permission Blocked Warning Prompt */}
+                {micBlocked && (
+                  <div
+                    id="mic-blocked-inline-prompt"
+                    className="w-full bg-rose-950/70 border border-rose-500/60 rounded-xl p-4 flex flex-col gap-3 text-xs text-rose-200 animate-in fade-in"
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <div className="p-1.5 rounded-lg bg-rose-900/60 border border-rose-600/50 text-rose-300 shrink-0 mt-0.5">
+                        <MicOff className="w-4 h-4 text-rose-400" />
+                      </div>
+                      <div className="flex-1">
+                        <span className="font-bold text-rose-100 block text-xs">
+                          Microphone Access Blocked or Denied
+                        </span>
+                        <p className="text-[11px] text-rose-300/90 mt-0.5 leading-relaxed">
+                          {blockedErrorDetail ||
+                            'Your browser or iframe security policy blocked audio input. Microphone access is required to capture vocal timbre.'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-950/90 rounded-lg p-3 text-[11px] text-slate-300 border border-slate-800 flex flex-col gap-1.5">
+                      <span className="font-semibold text-rose-300 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3" /> Quick fix instructions:
+                      </span>
+                      <ol className="list-decimal list-inside text-slate-400 space-y-1 pl-1">
+                        <li>
+                          Look for the <strong className="text-slate-200">microphone / lock</strong> icon in your browser URL address bar.
+                        </li>
+                        <li>
+                          Click it and toggle <strong className="text-slate-200">Microphone</strong> to <strong className="text-emerald-400">"Allow"</strong>.
+                        </li>
+                        <li>
+                          If previewing inside an iframe container, open the app in a new tab.
+                        </li>
+                      </ol>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-0.5">
+                      <button
+                        type="button"
+                        id="retry-mic-record-btn"
+                        onClick={handleStartRecording}
+                        className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-rose-600/30 transition-all active:scale-95"
+                      >
+                        <Mic className="w-3.5 h-3.5" />
+                        <span>Retry Permission Request</span>
+                      </button>
+
+                      {onOpenSettings && (
+                        <button
+                          type="button"
+                          id="open-settings-from-blocked-btn"
+                          onClick={onOpenSettings}
+                          className="px-3.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-all"
+                        >
+                          Studio Settings
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Prompt Script Guidance */}
                 <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800 text-center w-full">
@@ -251,7 +341,7 @@ export const VoiceCloningStudio: React.FC<VoiceCloningStudioProps> = ({
                       className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-rose-600/30 transition-all active:scale-95"
                     >
                       <Mic className="w-4 h-4" />
-                      <span>{recordedBlob ? 'Re-record Sample' : 'Start 5s Recording'}</span>
+                      <span>{recordedBlob ? 'Re-record Sample' : `Start ${sampleDuration}s Recording`}</span>
                     </button>
                   ) : (
                     <button
@@ -260,7 +350,7 @@ export const VoiceCloningStudio: React.FC<VoiceCloningStudioProps> = ({
                       className="px-5 py-2.5 rounded-xl bg-slate-800 border border-rose-500 text-rose-400 text-xs font-bold flex items-center gap-2 shadow-lg transition-all animate-pulse"
                     >
                       <Square className="w-4 h-4 fill-rose-400" />
-                      <span>Stop Recording ({recordingTime}s / 7s)</span>
+                      <span>Stop Recording ({recordingTime}s / {sampleDuration}s)</span>
                     </button>
                   )}
                 </div>

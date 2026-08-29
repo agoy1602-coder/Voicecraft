@@ -11,6 +11,7 @@ import {
   Wifi,
   WifiOff,
   Sparkles,
+  Settings,
 } from 'lucide-react';
 import { UserSettings, AppNotification } from '../types';
 
@@ -23,6 +24,7 @@ interface HeaderProps {
   onOpenSyncModal: () => void;
   onOpenFeedbackModal: () => void;
   onOpenNotifications: () => void;
+  onOpenSettings: () => void;
   unreadNotifsCount: number;
   activeTab: 'studio' | 'clone' | 'library';
   onChangeTab: (tab: 'studio' | 'clone' | 'library') => void;
@@ -37,6 +39,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSyncModal,
   onOpenFeedbackModal,
   onOpenNotifications,
+  onOpenSettings,
   unreadNotifsCount,
   activeTab,
   onChangeTab,
@@ -184,6 +187,16 @@ export const Header: React.FC<HeaderProps> = ({
             className="p-2 rounded-lg bg-slate-900 border border-slate-700/60 text-slate-300 hover:text-slate-100 transition-all"
           >
             {settings.darkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-indigo-400" />}
+          </button>
+
+          {/* Settings Modal (Gear Icon) */}
+          <button
+            id="open-settings-btn"
+            onClick={onOpenSettings}
+            title="Studio Settings & Microphone Access"
+            className="p-2 rounded-lg bg-slate-900 border border-slate-700/60 text-slate-300 hover:text-slate-100 hover:border-violet-500/50 transition-all group"
+          >
+            <Settings className="w-4 h-4 text-slate-300 group-hover:rotate-45 transition-transform duration-300" />
           </button>
         </div>
       </div>

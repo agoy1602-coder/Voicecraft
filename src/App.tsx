@@ -9,6 +9,7 @@ import { CloudSyncModal } from './components/CloudSyncModal';
 import { FeedbackModal } from './components/FeedbackModal';
 import { NotificationsPanel } from './components/NotificationsPanel';
 import { ExportModal } from './components/ExportModal';
+import { SettingsModal } from './components/SettingsModal';
 import {
   AudioClip,
   ClonedVoiceProfile,
@@ -47,6 +48,7 @@ export default function App() {
   const [isSyncOpen, setIsSyncOpen] = useState<boolean>(false);
   const [isFeedbackOpen, setIsFeedbackOpen] = useState<boolean>(false);
   const [isNotifsOpen, setIsNotifsOpen] = useState<boolean>(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [exportModalClip, setExportModalClip] = useState<AudioClip | null>(null);
 
   // Initialize App Data & Encryption
@@ -331,6 +333,18 @@ export default function App() {
     const updated = { ...settings, ...newSt };
     setSettings(updated);
     storageService.saveSettings(updated);
+    if (typeof document !== 'undefined') {
+      if (updated.darkMode) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      if (updated.highContrast) {
+        document.documentElement.classList.add('contrast-more');
+      } else {
+        document.documentElement.classList.remove('contrast-more');
+      }
+    }
   };
 
   const unreadCount = notifications.filter((n) => !n.read).length;
@@ -351,6 +365,7 @@ export default function App() {
         onOpenSyncModal={() => setIsSyncOpen(true)}
         onOpenFeedbackModal={() => setIsFeedbackOpen(true)}
         onOpenNotifications={() => setIsNotifsOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
         unreadNotifsCount={unreadCount}
         activeTab={activeTab}
         onChangeTab={setActiveTab}
@@ -409,6 +424,8 @@ export default function App() {
               onAddClonedVoice={handleAddClonedVoice}
               onDeleteClonedVoice={handleDeleteClonedVoice}
               onSelectForTTS={handleSelectVoiceForTTS}
+              sampleDuration={settings.sampleRecordingDuration || 5}
+              onOpenSettings={() => setIsSettingsOpen(true)}
             />
           </div>
         )}
@@ -496,6 +513,13 @@ export default function App() {
         clip={exportModalClip}
         isOpen={!!exportModalClip}
         onClose={() => setExportModalClip(null)}
+      />
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        settings={settings}
+        onUpdateSettings={handleUpdateSettings}
       />
     </div>
   );

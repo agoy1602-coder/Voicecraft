@@ -13,6 +13,8 @@ const STORAGE_KEYS = {
 
 export const DEFAULT_SETTINGS: UserSettings = {
   darkMode: true,
+  highContrast: false,
+  sampleRecordingDuration: 5,
   defaultLanguage: 'en-US',
   defaultTone: 'professional',
   defaultVoice: 'voice_zephyr',

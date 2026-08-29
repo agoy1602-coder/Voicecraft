@@ -169,6 +169,8 @@ export interface AppNotification {
 
 export interface UserSettings {
   darkMode: boolean;
+  highContrast?: boolean;
+  sampleRecordingDuration: number;
   defaultLanguage: SupportedLanguage;
   defaultTone: ToneType;
   defaultVoice: string;

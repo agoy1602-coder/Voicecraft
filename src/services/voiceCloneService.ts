@@ -19,9 +19,12 @@ class VoiceCloneService {
   private analyserNode: AnalyserNode | null = null;
   private mediaStream: MediaStream | null = null;
 
-  async startRecording(onFftData?: (data: Uint8Array) => void): Promise<void> {
+  async startRecording(
+    onFftData?: (data: Uint8Array) => void,
+    existingStream?: MediaStream | null
+  ): Promise<void> {
     this.audioChunks = [];
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = existingStream || (await navigator.mediaDevices.getUserMedia({ audio: true }));
     this.mediaStream = stream;
 
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -54,7 +57,7 @@ class VoiceCloneService {
     this.mediaRecorder.start(100);
   }
 
-  async stopRecording(): Promise<{ blob: Blob; durationSec: number; base64: string }> {
+  async stopRecording(durationSec: number = 5): Promise<{ blob: Blob; durationSec: number; base64: string }> {
     return new Promise((resolve, reject) => {
       if (!this.mediaRecorder) {
         reject(new Error('MediaRecorder not active'));
@@ -79,7 +82,7 @@ class VoiceCloneService {
           const base64Data = (reader.result as string).split(',')[1] || '';
           resolve({
             blob,
-            durationSec: 5,
+            durationSec,
             base64: base64Data,
           });
         };
