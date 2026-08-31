@@ -26,11 +26,15 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+function getGeminiApiKey() {
+  return process.env.GEMINI_API_KEY || process.env.VOICECRAFT_API_KEY || '';
+}
+
 let aiClient: GoogleGenAI | null = null;
 function getAI() {
   if (!aiClient) {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) throw new Error('GEMINI_API_KEY environment variable is not configured');
+    const key = getGeminiApiKey();
+    if (!key) throw new Error('No Gemini API key is configured. Set GEMINI_API_KEY (preferred) or VOICECRAFT_API_KEY.');
     aiClient = new GoogleGenAI({ apiKey: key });
   }
   return aiClient;
@@ -43,7 +47,7 @@ const feedbackStore: any[] = [];
 const notificationStore = new Map<string, any[]>();
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: Date.now(), geminiConfigured: !!process.env.GEMINI_API_KEY, engine: 'VoiceCraft Studio v2.4' });
+  res.json({ status: 'ok', timestamp: Date.now(), geminiConfigured: !!getGeminiApiKey(), engine: 'VoiceCraft Studio v2.4' });
 });
 
 app.post('/api/tts/generate', async (req, res) => {
@@ -91,7 +95,7 @@ app.post('/api/voice-clone/analyze', async (req, res) => {
     const { name, sampleBase64, mimeType = 'audio/webm', audioDurationSeconds = 5, notes = '' } = req.body;
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'Voice name is required' });
     let profile: any = null;
-    if (process.env.GEMINI_API_KEY) {
+    if (getGeminiApiKey()) {
       try {
         const prompt = `Analyze the vocal characteristics of ${name}. Return only JSON with fields name, gender, basePitchHz, dominantTone, timbreDescription, recommendedBaseVoice, pitchShiftOffset, speedFactor, resonanceFactor, breathiness, promptModifier.`;
         const parts: any[] = [{ text: prompt }];
@@ -101,7 +105,7 @@ app.post('/api/voice-clone/analyze', async (req, res) => {
       } catch { /* use heuristic */ }
     }
     profile ||= heuristic(name.trim(), notes);
-    res.json({ success: true, profile: { id: `clone_${Date.now()}`, name: name.trim(), notes, createdAt: Date.now(), sampleDuration: audioDurationSeconds, ...profile }, engine: process.env.GEMINI_API_KEY ? 'gemini_multimodal' : 'acoustic_heuristic' });
+    res.json({ success: true, profile: { id: `clone_${Date.now()}`, name: name.trim(), notes, createdAt: Date.now(), sampleDuration: audioDurationSeconds, ...profile }, engine: getGeminiApiKey() ? 'gemini_multimodal' : 'acoustic_heuristic' });
   } catch { res.status(500).json({ error: 'Voice clone analysis failed' }); }
 });
 
