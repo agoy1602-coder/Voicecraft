@@ -54,9 +54,6 @@ class TTSService {
   async generateSpeech(options: TTSGenerateOptions): Promise<TTSResult> {
     const startTime = performance.now();
     const quota = this.getQuotaState();
-    // The app passes forceOffline from its UI connection state. navigator.onLine is the authoritative
-    // browser signal for whether the cloud API can actually be reached. This prevents a stale UI state
-    // from forcing every synthesis request into speechSynthesis while the device is online.
     const isOfflineNetwork = !navigator.onLine || (options.forceOffline === true && !navigator.onLine) || quota.isQuotaActive;
 
     if (!isOfflineNetwork) {
@@ -78,12 +75,13 @@ class TTSService {
           return { clip, audioBuffer, isOffline: false, latencyMs };
         }
         if (data.quotaExceeded || response.status === 429) { const retrySec = data.retryAfterSeconds || 15; this.setQuotaCooldown(retrySec, `Gemini TTS rate limit active. Using offline engine for the next ${retrySec}s.`); return await this.generateOfflineSpeech(options, startTime, true, retrySec); }
-        if (!data.success && data.useClientFallback) {
-          console.error('[VoiceCraft] Cloud TTS rejected request:', data.error || 'Unknown API error');
-          return await this.generateOfflineSpeech(options, startTime, false, 0);
-        }
+        const apiError = data?.error || `Cloud TTS returned HTTP ${response.status}.`;
+        console.error('[VoiceCraft] Cloud TTS rejected request:', apiError);
+        throw new Error(apiError);
       } catch (error) {
-        console.error('[VoiceCraft] Cloud TTS request failed:', error);
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[VoiceCraft] Cloud TTS request/decoding failed:', message);
+        throw new Error(`Cloud TTS failed: ${message}`);
       }
     }
     return await this.generateOfflineSpeech(options, startTime, quota.isQuotaActive, Math.max(0, Math.ceil((quota.expiresAt - Date.now()) / 1000)));
