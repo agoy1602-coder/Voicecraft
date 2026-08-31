@@ -8,6 +8,7 @@ import {
 import { base64PcmToAudioBuffer, pcmToWavBlob } from './audioExport';
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || 'https://voicecraft-api.vercel.app').replace(/\/$/, '');
+const CLOUD_TIMEOUT_MS = 45000;
 
 export interface TTSGenerateOptions {
   text: string;
@@ -37,54 +38,97 @@ export const TONE_PRESETS: { tone: ToneType; label: string; iconName: string; de
   { tone: 'calm', label: 'Calm', iconName: 'Waves', desc: 'Serene, relaxed, steady breathing cadence' }, { tone: 'deep', label: 'Deep', iconName: 'Volume2', desc: 'Rich bass resonance with authoritative weight' }, { tone: 'slow', label: 'Slow', iconName: 'Hourglass', desc: 'Deliberate pacing with soft reflective pauses' }, { tone: 'introspective', label: 'Introspective', iconName: 'Eye', desc: 'Thoughtful philosopher cadence' }, { tone: 'funny', label: 'Funny', iconName: 'Smile', desc: 'Witty, dynamic, playful and cheerful inflection' }, { tone: 'professional', label: 'Professional', iconName: 'Briefcase', desc: 'Crisp, articulate executive delivery' }, { tone: 'dramatic', label: 'Dramatic', iconName: 'Flame', desc: 'Cinematic storytelling with vivid emotion' }, { tone: 'whispering', label: 'Whispering', iconName: 'Wind', desc: 'Gentle, intimate, soft ASMR whisper' }, { tone: 'energetic', label: 'Energetic', iconName: 'Zap', desc: 'High momentum, vibrant and motivating' },
 ];
 
-export interface TTSResult { clip: AudioClip; audioBuffer: AudioBuffer; isOffline: boolean; isQuotaFallback?: boolean; retryAfterSeconds?: number; latencyMs: number; }
+export type TTSFailureCode = 'OFFLINE' | 'GEMINI_QUOTA' | 'GEMINI_NOT_CONFIGURED' | 'GEMINI_PROVIDER_ERROR' | 'NETWORK_ERROR' | 'TIMEOUT' | 'INVALID_RESPONSE' | 'AUDIO_DECODE_ERROR' | 'REQUEST_IN_PROGRESS';
+
+export class TTSServiceError extends Error {
+  code: TTSFailureCode;
+  retryAfterSeconds?: number;
+  requestId?: string;
+  constructor(code: TTSFailureCode, message: string, retryAfterSeconds?: number, requestId?: string) {
+    super(message);
+    this.name = 'TTSServiceError';
+    this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.requestId = requestId;
+  }
+}
+
+export interface TTSResult {
+  clip: AudioClip;
+  audioBuffer: AudioBuffer;
+  isOffline: boolean;
+  isQuotaFallback?: boolean;
+  retryAfterSeconds?: number;
+  latencyMs: number;
+  engine?: 'gemini-cloud' | 'offline' | 'quota-fallback';
+  requestId?: string;
+}
 export interface QuotaState { isQuotaActive: boolean; retryAfterSeconds: number; expiresAt: number; message: string; }
 
 class TTSService {
   private audioCtx: AudioContext | null = null;
   private quotaState: QuotaState = { isQuotaActive: false, retryAfterSeconds: 0, expiresAt: 0, message: '' };
   private quotaListeners: ((state: QuotaState) => void)[] = [];
+  private requestInProgress = false;
 
-  getAudioContext(): AudioContext { const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext; if (!this.audioCtx || this.audioCtx.state === 'closed') this.audioCtx = new AudioContextClass({ sampleRate: 24000 }); if (this.audioCtx.state === 'suspended') this.audioCtx.resume(); return this.audioCtx; }
+  getAudioContext(): AudioContext { const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext; if (!this.audioCtx || this.audioCtx.state === 'closed') this.audioCtx = new AudioContextClass({ sampleRate: 24000 }); if (this.audioCtx.state === 'suspended') void this.audioCtx.resume(); return this.audioCtx; }
   getQuotaState(): QuotaState { if (this.quotaState.isQuotaActive && Date.now() > this.quotaState.expiresAt) { this.quotaState = { isQuotaActive: false, retryAfterSeconds: 0, expiresAt: 0, message: '' }; this.notifyQuotaListeners(); } return this.quotaState; }
   subscribeQuota(listener: (state: QuotaState) => void): () => void { this.quotaListeners.push(listener); listener(this.getQuotaState()); return () => { this.quotaListeners = this.quotaListeners.filter((l) => l !== listener); }; }
-  private setQuotaCooldown(seconds: number, message: string) { const expiresAt = Date.now() + seconds * 1000; this.quotaState = { isQuotaActive: true, retryAfterSeconds: seconds, expiresAt, message }; this.notifyQuotaListeners(); setTimeout(() => { if (Date.now() >= this.quotaState.expiresAt) { this.quotaState = { isQuotaActive: false, retryAfterSeconds: 0, expiresAt: 0, message: '' }; this.notifyQuotaListeners(); } }, seconds * 1000 + 100); }
+  private setQuotaCooldown(seconds: number, message: string) { const safeSeconds = Math.max(1, Math.min(300, Math.ceil(seconds))); const expiresAt = Date.now() + safeSeconds * 1000; this.quotaState = { isQuotaActive: true, retryAfterSeconds: safeSeconds, expiresAt, message }; this.notifyQuotaListeners(); setTimeout(() => { if (Date.now() >= this.quotaState.expiresAt) { this.quotaState = { isQuotaActive: false, retryAfterSeconds: 0, expiresAt: 0, message: '' }; this.notifyQuotaListeners(); } }, safeSeconds * 1000 + 100); }
   private notifyQuotaListeners() { this.quotaListeners.forEach((fn) => fn(this.quotaState)); }
 
   async generateSpeech(options: TTSGenerateOptions): Promise<TTSResult> {
+    if (this.requestInProgress) throw new TTSServiceError('REQUEST_IN_PROGRESS', 'Speech generation is already running. Please wait for the current render to finish.');
     const startTime = performance.now();
     const quota = this.getQuotaState();
-    const isOfflineNetwork = !navigator.onLine || (options.forceOffline === true && !navigator.onLine) || quota.isQuotaActive;
-
-    if (!isOfflineNetwork) {
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/tts/generate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: options.text, voice: options.voice.baseVoice || 'Kore', tone: options.tone, language: options.language, speed: options.speed, pitch: options.pitch, isClonedVoice: options.voice.type === 'cloned', clonedProfileData: options.voice }),
-        });
-        const data = await response.json();
-        if (response.ok && data.success && data.audioBase64) {
-          const ctx = this.getAudioContext();
-          const { audioBuffer, wavBlob } = await base64PcmToAudioBuffer(data.audioBase64, ctx, data.sampleRate || 24000);
-          const duration = audioBuffer.duration;
-          const sentences = this.calculateSentenceTimings(options.text, duration);
-          const blobUrl = URL.createObjectURL(wavBlob);
-          const latencyMs = Math.round(performance.now() - startTime);
-          const clip: AudioClip = { id: `clip_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, title: this.generateTitle(options.text), text: options.text, voiceId: options.voice.id, voiceName: options.voice.name, voiceType: options.voice.type, tone: options.tone, language: options.language, durationSeconds: duration, audioBlobUrl: blobUrl, audioBase64: data.audioBase64, format: 'wav', sampleRate: data.sampleRate || 24000, sentences, isOfflineGenerated: false, createdAt: Date.now(), isFavorite: false, synced: false, tags: [options.tone, options.language, options.voice.name] };
-          return { clip, audioBuffer, isOffline: false, latencyMs };
-        }
-        if (data.quotaExceeded || response.status === 429) { const retrySec = data.retryAfterSeconds || 15; this.setQuotaCooldown(retrySec, `Gemini TTS rate limit active. Using offline engine for the next ${retrySec}s.`); return await this.generateOfflineSpeech(options, startTime, true, retrySec); }
-        const apiError = data?.error || `Cloud TTS returned HTTP ${response.status}.`;
-        console.error('[VoiceCraft] Cloud TTS rejected request:', apiError);
-        throw new Error(apiError);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error('[VoiceCraft] Cloud TTS request/decoding failed:', message);
-        throw new Error(`Cloud TTS failed: ${message}`);
-      }
+    const shouldUseOffline = options.forceOffline === true || !navigator.onLine || quota.isQuotaActive;
+    if (shouldUseOffline) {
+      if (!navigator.onLine) return this.generateOfflineSpeech(options, startTime, false, 0);
+      return this.generateOfflineSpeech(options, startTime, quota.isQuotaActive, Math.max(0, Math.ceil((quota.expiresAt - Date.now()) / 1000)));
     }
-    return await this.generateOfflineSpeech(options, startTime, quota.isQuotaActive, Math.max(0, Math.ceil((quota.expiresAt - Date.now()) / 1000)));
+
+    this.requestInProgress = true;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), CLOUD_TIMEOUT_MS);
+    try {
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE_URL}/api/tts/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: options.text, voice: options.voice.baseVoice || 'Kore', tone: options.tone, language: options.language, speed: options.speed, pitch: options.pitch, isClonedVoice: options.voice.type === 'cloned', clonedProfileData: options.voice }), signal: controller.signal });
+      } catch (error) {
+        if (controller.signal.aborted) throw new TTSServiceError('TIMEOUT', 'Cloud TTS timed out after 45 seconds. The cloud service may be busy.');
+        const message = error instanceof Error ? error.message : String(error);
+        throw new TTSServiceError('NETWORK_ERROR', `Cloud TTS could not be reached: ${message}`);
+      }
+
+      let data: any;
+      try { data = await response.json(); } catch { throw new TTSServiceError('INVALID_RESPONSE', `Cloud TTS returned an invalid response (HTTP ${response.status}).`); }
+
+      if (response.ok && data?.success && data.audioBase64) {
+        const ctx = this.getAudioContext();
+        let decoded: { audioBuffer: AudioBuffer; wavBlob: Blob };
+        try { decoded = await base64PcmToAudioBuffer(data.audioBase64, ctx, data.sampleRate || 24000); } catch (error) { const message = error instanceof Error ? error.message : String(error); throw new TTSServiceError('AUDIO_DECODE_ERROR', `Cloud audio was received but could not be decoded: ${message}`); }
+        const duration = decoded.audioBuffer.duration;
+        const sentences = this.calculateSentenceTimings(options.text, duration);
+        const blobUrl = URL.createObjectURL(decoded.wavBlob);
+        const latencyMs = Math.round(performance.now() - startTime);
+        const clip: AudioClip = { id: `clip_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, title: this.generateTitle(options.text), text: options.text, voiceId: options.voice.id, voiceName: options.voice.name, voiceType: options.voice.type, tone: options.tone, language: options.language, durationSeconds: duration, audioBlobUrl: blobUrl, audioBase64: data.audioBase64, format: 'wav', sampleRate: data.sampleRate || 24000, sentences, isOfflineGenerated: false, createdAt: Date.now(), isFavorite: false, synced: false, tags: [options.tone, options.language, options.voice.name] };
+        return { clip, audioBuffer: decoded.audioBuffer, isOffline: false, latencyMs, engine: 'gemini-cloud', requestId: data.requestId };
+      }
+
+      if (data?.quotaExceeded || response.status === 429 || data?.errorCode === 'GEMINI_QUOTA') {
+        const headerRetry = Number(response.headers.get('Retry-After'));
+        const retrySec = data?.retryAfterSeconds || (Number.isFinite(headerRetry) && headerRetry > 0 ? headerRetry : 15);
+        this.setQuotaCooldown(retrySec, `Gemini quota/rate limit reached. Local fallback is active for about ${Math.ceil(retrySec)}s.`);
+        return await this.generateOfflineSpeech(options, startTime, true, retrySec);
+      }
+
+      if (data?.errorCode === 'GEMINI_NOT_CONFIGURED') throw new TTSServiceError('GEMINI_NOT_CONFIGURED', data.error, undefined, data.requestId);
+      if (data?.errorCode === 'GEMINI_PROVIDER_ERROR') throw new TTSServiceError('GEMINI_PROVIDER_ERROR', data.error, undefined, data.requestId);
+      throw new TTSServiceError('INVALID_RESPONSE', data?.error || `Cloud TTS returned HTTP ${response.status}.`, undefined, data?.requestId);
+    } finally {
+      window.clearTimeout(timeout);
+      this.requestInProgress = false;
+    }
   }
 
   async generateOfflineSpeech(options: TTSGenerateOptions, startTime: number, isQuotaFallback: boolean = false, retryAfterSeconds: number = 0): Promise<TTSResult> {
@@ -108,7 +152,7 @@ class TTSService {
     const wavBlob = pcmToWavBlob(pcm16, sampleRate, 1); const blobUrl = URL.createObjectURL(wavBlob); const latencyMs = Math.round(performance.now() - startTime); const sentences = this.calculateSentenceTimings(options.text, estimatedDuration);
     let audioBase64 = ''; try { const arrayBuffer = await wavBlob.arrayBuffer(); const bytes = new Uint8Array(arrayBuffer); let binary = ''; for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]); audioBase64 = btoa(binary); } catch {}
     const clip: AudioClip = { id: `clip_offline_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, title: this.generateTitle(options.text), text: options.text, voiceId: options.voice.id, voiceName: `${options.voice.name} (${isQuotaFallback ? 'Zero-Quota' : 'Offline'})`, voiceType: options.voice.type, tone: options.tone, language: options.language, durationSeconds: estimatedDuration, audioBlobUrl: blobUrl, audioBase64, format: 'wav', sampleRate, sentences, isOfflineGenerated: true, createdAt: Date.now(), isFavorite: false, synced: false, tags: [isQuotaFallback ? 'zero-quota' : 'offline', options.tone, options.language] };
-    return { clip, audioBuffer, isOffline: true, isQuotaFallback, retryAfterSeconds, latencyMs };
+    return { clip, audioBuffer, isOffline: true, isQuotaFallback, retryAfterSeconds, latencyMs, engine: isQuotaFallback ? 'quota-fallback' : 'offline' };
   }
 
   private calculateSentenceTimings(text: string, totalDuration: number): AudioSentence[] { const rawSentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text]; const cleanSentences = rawSentences.map((s) => s.trim()).filter(Boolean); if (cleanSentences.length === 0) return [{ text, startSec: 0, endSec: totalDuration }]; const totalChars = cleanSentences.reduce((acc, s) => acc + s.length, 0); let currentStart = 0; return cleanSentences.map((s) => { const charRatio = s.length / totalChars; const sentenceDuration = Math.max(0.4, charRatio * totalDuration); const startSec = currentStart; const endSec = Math.min(totalDuration, currentStart + sentenceDuration); currentStart = endSec; return { text: s, startSec: Number(startSec.toFixed(2)), endSec: Number(endSec.toFixed(2)) }; }); }
