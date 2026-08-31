@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 
 const ALLOWED_ORIGIN = 'https://agoy1602-coder.github.io';
+const TTS_MODEL = 'gemini-3.1-flash-tts-preview';
 
 function setCors(res: any) {
   res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
@@ -8,17 +9,34 @@ function setCors(res: any) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Access-Control-Max-Age', '86400');
   res.setHeader('Vary', 'Origin');
+  res.setHeader('Cache-Control', 'no-store');
+}
+
+function requestId() {
+  return `tts_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getRetryAfterSeconds(error: any) {
+  const raw = error?.response?.headers?.get?.('retry-after') ?? error?.headers?.['retry-after'] ?? error?.retryAfterSeconds;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(300, Math.ceil(parsed)) : 15;
 }
 
 export default async function handler(req: any, res: any) {
+  const id = requestId();
   setCors(res);
+  res.setHeader('X-VoiceCraft-Request-Id', id);
+  res.setHeader('X-VoiceCraft-Engine', 'gemini-cloud');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(204).end();
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'Method not allowed' });
+    return res.status(405).json({
+      success: false,
+      errorCode: 'METHOD_NOT_ALLOWED',
+      error: 'Method not allowed',
+      requestId: id,
+    });
   }
 
   const key = process.env.GEMINI_API_KEY || process.env.VOICECRAFT_API_KEY || '';
@@ -26,7 +44,9 @@ export default async function handler(req: any, res: any) {
     return res.status(503).json({
       success: false,
       configured: false,
+      errorCode: 'GEMINI_NOT_CONFIGURED',
       error: 'Gemini API key is not available to this production function.',
+      requestId: id,
     });
   }
 
@@ -44,8 +64,8 @@ export default async function handler(req: any, res: any) {
       clonedProfileData = null,
     } = body;
 
-    if (!text || typeof text !== 'string') {
-      return res.status(400).json({ success: false, error: 'Text prompt is required' });
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ success: false, errorCode: 'INVALID_TEXT', error: 'Text prompt is required', requestId: id });
     }
 
     const validVoices = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'];
@@ -61,7 +81,7 @@ export default async function handler(req: any, res: any) {
 
     const ai = new GoogleGenAI({ apiKey: key });
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-tts-preview',
+      model: TTS_MODEL,
       contents: [{ parts: [{ text: `${delivery}:\n\n"${text}"` }] }],
       config: {
         responseModalities: ['AUDIO'],
@@ -79,7 +99,9 @@ export default async function handler(req: any, res: any) {
         success: false,
         quotaExceeded: false,
         useClientFallback: false,
+        errorCode: 'NO_AUDIO_RETURNED',
         error: 'Gemini returned no audio data.',
+        requestId: id,
       });
     }
 
@@ -93,20 +115,27 @@ export default async function handler(req: any, res: any) {
       language,
       characters: text.length,
       generatedAt: Date.now(),
+      requestId: id,
+      engine: 'gemini-cloud',
+      model: TTS_MODEL,
     });
   } catch (error: any) {
     const msg = error?.message || String(error);
     const status = error?.status ?? error?.statusCode ?? error?.code ?? null;
-    const quota = status === 429 || /429|quota|resource_exhausted/i.test(msg);
+    const quota = status === 429 || /429|quota|resource_exhausted|rate.?limit/i.test(msg);
+    const retryAfterSeconds = getRetryAfterSeconds(error);
 
-    console.error('[VoiceCraft] Gemini TTS error:', msg);
+    console.error('[VoiceCraft] Gemini TTS error:', { requestId: id, status, quota, message: msg });
 
     return res.status(quota ? 429 : 502).json({
       success: false,
       quotaExceeded: quota,
       useClientFallback: quota,
       providerStatus: status,
+      retryAfterSeconds: quota ? retryAfterSeconds : undefined,
+      errorCode: quota ? 'GEMINI_QUOTA' : 'GEMINI_PROVIDER_ERROR',
       error: quota ? 'Gemini TTS rate limit or quota reached.' : `Gemini TTS error: ${msg.slice(0, 300)}`,
+      requestId: id,
     });
   }
 }
