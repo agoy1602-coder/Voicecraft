@@ -54,12 +54,16 @@ class TTSService {
   async generateSpeech(options: TTSGenerateOptions): Promise<TTSResult> {
     const startTime = performance.now();
     const quota = this.getQuotaState();
-    const isOfflineNetwork = !navigator.onLine || options.forceOffline || quota.isQuotaActive;
+    // The app passes forceOffline from its UI connection state. navigator.onLine is the authoritative
+    // browser signal for whether the cloud API can actually be reached. This prevents a stale UI state
+    // from forcing every synthesis request into speechSynthesis while the device is online.
+    const isOfflineNetwork = !navigator.onLine || (options.forceOffline === true && !navigator.onLine) || quota.isQuotaActive;
 
     if (!isOfflineNetwork) {
       try {
         const response = await fetch(`${API_BASE_URL}/api/tts/generate`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: options.text, voice: options.voice.baseVoice || 'Kore', tone: options.tone, language: options.language, speed: options.speed, pitch: options.pitch, isClonedVoice: options.voice.type === 'cloned', clonedProfileData: options.voice }),
         });
         const data = await response.json();
@@ -74,8 +78,13 @@ class TTSService {
           return { clip, audioBuffer, isOffline: false, latencyMs };
         }
         if (data.quotaExceeded || response.status === 429) { const retrySec = data.retryAfterSeconds || 15; this.setQuotaCooldown(retrySec, `Gemini TTS rate limit active. Using offline engine for the next ${retrySec}s.`); return await this.generateOfflineSpeech(options, startTime, true, retrySec); }
-        if (!data.success && data.useClientFallback) return await this.generateOfflineSpeech(options, startTime, false, 0);
-      } catch { /* fall through to offline */ }
+        if (!data.success && data.useClientFallback) {
+          console.error('[VoiceCraft] Cloud TTS rejected request:', data.error || 'Unknown API error');
+          return await this.generateOfflineSpeech(options, startTime, false, 0);
+        }
+      } catch (error) {
+        console.error('[VoiceCraft] Cloud TTS request failed:', error);
+      }
     }
     return await this.generateOfflineSpeech(options, startTime, quota.isQuotaActive, Math.max(0, Math.ceil((quota.expiresAt - Date.now()) / 1000)));
   }
