@@ -5,7 +5,6 @@ import dotenv from 'dotenv';
 dotenv.config();
 const app = express();
 
-// Public API: allow the production GitHub Pages frontend to call this Vercel backend.
 const allowedOrigins = new Set([
   'https://agoy1602-coder.github.io',
   'http://localhost:5173',
@@ -69,7 +68,7 @@ app.post('/api/tts/generate', async (req, res) => {
       config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: ttsVoice } } } }
     });
     const audioBase64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!audioBase64) return res.json({ success: false, useClientFallback: true, error: 'No audio was returned by Gemini.' });
+    if (!audioBase64) return res.status(502).json({ success: false, useClientFallback: false, error: 'Gemini returned no audio data.' });
     const payload = { audioBase64, format: 'pcm_24khz', sampleRate: 24000, voiceUsed: ttsVoice, tone, language, characters: text.length, generatedAt: Date.now() };
     if (audioCache.size >= 100) audioCache.delete(audioCache.keys().next().value as string);
     audioCache.set(cacheKey, payload);
@@ -77,7 +76,8 @@ app.post('/api/tts/generate', async (req, res) => {
   } catch (error: any) {
     const msg = error?.message || String(error);
     const quota = error?.status === 'RESOURCE_EXHAUSTED' || error?.code === 429 || /429|quota|resource_exhausted/i.test(msg);
-    res.json({ success: false, quotaExceeded: quota, useClientFallback: true, error: quota ? 'Gemini TTS quota/rate limit reached.' : 'TTS generation failed.' });
+    console.error('[VoiceCraft] Gemini TTS error:', msg);
+    res.status(quota ? 429 : 502).json({ success: false, quotaExceeded: quota, useClientFallback: quota, error: quota ? 'Gemini TTS rate limit or quota reached.' : `Gemini TTS error: ${msg.slice(0, 300)}` });
   }
 });
 
