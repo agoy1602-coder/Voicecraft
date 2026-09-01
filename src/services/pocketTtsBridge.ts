@@ -10,7 +10,6 @@ let enginePromise: Promise<PocketTTS> | null = null;
 async function getEngine(): Promise<PocketTTS> {
   if (engine?.ready) return engine;
   if (enginePromise) return enginePromise;
-
   enginePromise = (async () => {
     const instance = new PocketTTS({
       language: 'english_2026-04',
@@ -24,7 +23,6 @@ async function getEngine(): Promise<PocketTTS> {
     engine = instance;
     return instance;
   })();
-
   try {
     return await enginePromise;
   } catch (error) {
@@ -34,12 +32,15 @@ async function getEngine(): Promise<PocketTTS> {
   }
 }
 
-async function decodeReference(blob: Blob): Promise<{ audio: Float32Array; sampleRate: number }> {
+async function decodeReference(blob: Blob): Promise<{ audio: Float32Array; sampleRate: number; duration: number }> {
   const context = new AudioContext();
   try {
     const decoded = await context.decodeAudioData(await blob.arrayBuffer());
-    const source = decoded.getChannelData(0);
-    return { audio: new Float32Array(source), sampleRate: decoded.sampleRate };
+    return {
+      audio: new Float32Array(decoded.getChannelData(0)),
+      sampleRate: decoded.sampleRate,
+      duration: decoded.duration,
+    };
   } finally {
     await context.close().catch(() => undefined);
   }
@@ -77,7 +78,7 @@ async function cloneLocally(name: string, blob: Blob, notes: string): Promise<Cl
     inputSampleRate: decoded.sampleRate,
     name,
   });
-  return makeProfile(name, voiceRef, Math.max(1, Math.round(blob.size > 0 ? 5 : 0)), notes);
+  return makeProfile(name, voiceRef, Number(decoded.duration.toFixed(2)), notes);
 }
 
 async function blobToBase64(blob: Blob): Promise<string> {
@@ -118,7 +119,6 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
     voice: voice.providerVoiceId,
     onChunk: (chunk) => chunks.push(new Float32Array(chunk)),
   });
-
   if (!chunks.length) throw new Error('Pocket TTS returned no audio for the cloned voice.');
 
   const wavBlob = chunksToWavBlob(chunks, tts.sampleRate);
@@ -127,7 +127,6 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
   await ctx.close().catch(() => undefined);
 
   const duration = metrics.audioDuration || audioBuffer.duration;
-  const audioBase64 = await blobToBase64(wavBlob);
   const clip: AudioClip = {
     id: `clip_pocket_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     title: `Pocket Clone — ${voice.name}`,
@@ -139,7 +138,7 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
     language: options.language,
     durationSeconds: duration,
     audioBlobUrl: URL.createObjectURL(wavBlob),
-    audioBase64,
+    audioBase64: await blobToBase64(wavBlob),
     format: 'wav',
     sampleRate: tts.sampleRate,
     sentences: sentenceTimings(options.text, duration),
@@ -164,14 +163,13 @@ export function installPocketTtsBridge(): void {
   const cloneService = voiceCloneService as any;
   const originalClone = cloneService.analyzeAndClone.bind(cloneService);
   cloneService.analyzeAndClone = async function(name: string, sampleBlob?: Blob, sampleBase64?: string, notes = '') {
-    if (sampleBlob) {
-      try {
-        return await cloneLocally(name, sampleBlob, notes);
-      } catch (error) {
-        console.warn('[VoiceCraft] Browser-local Pocket TTS clone unavailable; falling back to existing profile analysis.', error);
-      }
+    if (!sampleBlob) throw new Error('A local audio sample is required for browser voice cloning.');
+    try {
+      return await cloneLocally(name, sampleBlob, notes);
+    } catch (error) {
+      console.error('[VoiceCraft] Pocket TTS voice cloning failed:', error);
+      throw new Error('Browser voice cloning could not initialize on this device. No fake clone profile was created. Please try again with a shorter, clean recording or a more capable browser/device.');
     }
-    return originalClone(name, sampleBlob, sampleBase64, notes);
   };
 
   const tts = ttsService as any;
