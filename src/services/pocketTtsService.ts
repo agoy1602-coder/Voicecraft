@@ -95,6 +95,29 @@ class PocketTTSService {
     }
   }
 
+  async restoreClonedVoice(
+    voiceKey: string,
+    sampleBase64: string,
+    mimeType = 'audio/webm',
+    onProgress?: (progress: PocketTTSLoadProgress) => void,
+  ): Promise<PocketTTSCloneResult> {
+    const existingVoiceId = this.clonedVoices.get(voiceKey);
+    if (existingVoiceId && this.tts) {
+      return { voiceId: existingVoiceId, sampleRate: this.tts.sampleRate };
+    }
+
+    if (!sampleBase64) {
+      throw new Error('Saved voice reference audio is missing. Re-record the voice to restore this clone.');
+    }
+
+    onProgress?.({ label: 'Restoring saved voice profile…' });
+    const binary = atob(sampleBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: mimeType || 'audio/webm' });
+    return this.cloneVoice(blob, voiceKey, onProgress);
+  }
+
   async generate(text: string, voiceKey: string, persistedVoiceId?: string): Promise<PocketTTSSynthesisResult> {
     const engine = await this.getEngine();
     const voice = persistedVoiceId || this.clonedVoices.get(voiceKey);
