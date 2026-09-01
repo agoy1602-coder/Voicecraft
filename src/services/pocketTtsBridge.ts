@@ -19,6 +19,9 @@ async function getEngine(): Promise<PocketTTS> {
       cache: true,
       cacheName: 'voicecraft-pocket-tts-v1',
       maxThreads: 4,
+      // Keep the ONNX Runtime JavaScript/WASM runtime on the same origin as
+      // VoiceCraft so cloned-voice inference does not depend on a CDN offline.
+      ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
     });
     await instance.load();
     engine = instance;
