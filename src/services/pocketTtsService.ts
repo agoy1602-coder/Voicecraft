@@ -21,11 +21,20 @@ export interface PocketTTSLoadProgress {
 class PocketTTSService {
   private tts: PocketTTS | null = null;
   private loadPromise: Promise<PocketTTS> | null = null;
+  private loadProgressListeners = new Set<(progress: PocketTTSLoadProgress) => void>();
   private clonedVoices = new Map<string, string>();
 
   private async getEngine(onProgress?: (progress: PocketTTSLoadProgress) => void): Promise<PocketTTS> {
     if (this.tts) return this.tts;
-    if (this.loadPromise) return this.loadPromise;
+
+    if (onProgress) this.loadProgressListeners.add(onProgress);
+    if (this.loadPromise) {
+      try {
+        return await this.loadPromise;
+      } finally {
+        if (onProgress) this.loadProgressListeners.delete(onProgress);
+      }
+    }
 
     this.loadPromise = (async () => {
       const engine = new PocketTTS({
@@ -34,8 +43,9 @@ class PocketTTSService {
         voiceCloning: true,
         cache: true,
       });
+
       await engine.load((progress: PocketTTSLoadProgress) => {
-        onProgress?.(progress);
+        for (const listener of this.loadProgressListeners) listener(progress);
       });
       this.tts = engine;
       return engine;
@@ -46,6 +56,8 @@ class PocketTTSService {
     } catch (error) {
       this.loadPromise = null;
       throw error;
+    } finally {
+      if (onProgress) this.loadProgressListeners.delete(onProgress);
     }
   }
 
@@ -103,6 +115,7 @@ class PocketTTSService {
     this.tts?.destroy();
     this.tts = null;
     this.loadPromise = null;
+    this.loadProgressListeners.clear();
     this.clonedVoices.clear();
   }
 }
