@@ -1,10 +1,23 @@
 import { GoogleGenAI } from '@google/genai';
 
-const ALLOWED_ORIGIN = 'https://agoy1602-coder.github.io';
+const PRODUCTION_ORIGIN = 'https://agoy1602-coder.github.io';
+const VERCEL_PRODUCTION_ORIGINS = new Set([
+  'https://voicecraft-chi.vercel.app',
+  'https://voicecraft-ago-y.vercel.app',
+  'https://voicecraft-git-main-ago-y.vercel.app',
+]);
 const TTS_MODEL = 'gemini-3.1-flash-tts-preview';
 
-function setCors(res: any) {
-  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+function setCors(req: any, res: any) {
+  const origin = req?.headers?.origin || '';
+  // Allow the public GitHub Pages frontend, the known Voicecraft Vercel
+  // production aliases, and only this project's Vercel preview aliases.
+  const isVoicecraftVercelPreview = /^https:\/\/voicecraft-[a-z0-9-]+-ago-y\.vercel\.app$/i.test(origin);
+  const allowedOrigin = origin === PRODUCTION_ORIGIN || VERCEL_PRODUCTION_ORIGINS.has(origin) || isVoicecraftVercelPreview
+    ? origin
+    : PRODUCTION_ORIGIN;
+
+  res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Access-Control-Max-Age', '86400');
@@ -24,7 +37,7 @@ function getRetryAfterSeconds(error: any) {
 
 export default async function handler(req: any, res: any) {
   const id = requestId();
-  setCors(res);
+  setCors(req, res);
   res.setHeader('X-VoiceCraft-Request-Id', id);
   res.setHeader('X-VoiceCraft-Engine', 'gemini-cloud');
 
