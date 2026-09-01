@@ -171,7 +171,7 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
   return {
     clip,
     audioBuffer,
-    isOffline: false,
+    isOffline: true,
     isQuotaFallback: false,
     latencyMs: Math.round(performance.now() - start),
     engine: 'offline',
