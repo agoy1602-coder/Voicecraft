@@ -60,6 +60,7 @@ export default defineConfig(() => {
         workbox: {
           navigateFallback: `${appPath}/index.html`,
           globPatterns: ['**/*.{js,css,html,mjs,wasm,svg,ico,png,webp}'],
+          maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
         },
       }),
     ],
