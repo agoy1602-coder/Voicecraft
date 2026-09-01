@@ -13,21 +13,22 @@ class VoiceCloneService{
    if(!sampleBlob) throw new Error('A voice recording is required to create a real clone.');
    if(!sampleBase64) throw new Error('The recorded voice sample could not be saved. Please record it again.');
 
-   // IMPORTANT MOBILE FIX:
-   // Creating the saved voice profile must not block on the ~140 MB browser
-   // Pocket TTS ONNX bundle. On lower-memory Android devices this can stall
-   // for minutes while the worker initializes. The reference sample is the
-   // durable source of truth; Pocket TTS voice conditioning is now lazy and
-   // happens only when offline synthesis actually needs it.
+   // Do not initialize Pocket TTS or wait for cloud analysis during clone creation.
+   // The reference sample is the durable source of truth and Pocket TTS conditioning
+   // is performed lazily when offline synthesis needs the voice.
    onProgress?.({ label: 'Saving voice sample for offline cloning…' });
 
+   // Cloud analysis is optional metadata only. Never block clone creation on a
+   // network request because an unreachable/slow API can leave the UI loading forever.
    let profileData:any=null;
-   if(navigator.onLine&&sampleBase64){try{const res=await fetch(`${API_BASE_URL}/api/voice-clone/analyze`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,sampleBase64,mimeType:sampleBlob.type||'audio/webm',audioDurationSeconds:5,notes})});if(res.ok){const data=await res.json();if(data.success&&data.profile)profileData=data.profile;}}catch{}}
+   if(navigator.onLine&&sampleBase64){
+     void fetch(`${API_BASE_URL}/api/voice-clone/analyze`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,sampleBase64,mimeType:sampleBlob.type||'audio/webm',audioDurationSeconds:5,notes}),signal:AbortSignal.timeout?.(8000)}).then(async res=>{if(!res.ok)return;const data=await res.json();if(data.success&&data.profile)profileData=data.profile;}).catch(()=>{});
+   }
 
-   const id=profileData?.id||`clone_${Date.now()}`;
+   const id=`clone_${Date.now()}`;
    onProgress?.({ label: 'Voice saved. Offline Pocket TTS will initialize when you first synthesize.' });
 
-   return {id,name:profileData?.name||name,type:'cloned',gender:profileData?.gender||'neutral',tone:profileData?.dominantTone||'professional',baseVoice:profileData?.recommendedBaseVoice||'Zephyr',description:profileData?.timbreDescription||`Browser-cloned voice for ${name}`,avatarColor:this.getRandomAvatarGradient(),pitchShift:profileData?.pitchShiftOffset||0,speedFactor:profileData?.speedFactor||1,warmth:profileData?.resonanceFactor?Math.min(1,profileData.resonanceFactor*.7):.8,breathiness:profileData?.breathiness||.1,basePitchHz:profileData?.basePitchHz||160,timbreDescription:profileData?.timbreDescription||'Voice reference saved locally for Pocket TTS offline cloning.',promptModifier:profileData?.promptModifier||'Speak naturally using the cloned reference voice.',sampleDuration:profileData?.sampleDuration||5,notes,createdAt:Date.now(),provider:'pocket-tts',providerSampleBase64:sampleBase64,providerSampleMimeType:sampleBlob.type||'audio/webm'};
+   return {id,name,type:'cloned',gender:profileData?.gender||'neutral',tone:profileData?.dominantTone||'professional',baseVoice:profileData?.recommendedBaseVoice||'Zephyr',description:profileData?.timbreDescription||`Browser-cloned voice for ${name}`,avatarColor:this.getRandomAvatarGradient(),pitchShift:profileData?.pitchShiftOffset||0,speedFactor:profileData?.speedFactor||1,warmth:profileData?.resonanceFactor?Math.min(1,profileData.resonanceFactor*.7):.8,breathiness:profileData?.breathiness||.1,basePitchHz:profileData?.basePitchHz||160,timbreDescription:profileData?.timbreDescription||'Voice reference saved locally for Pocket TTS offline cloning.',promptModifier:profileData?.promptModifier||'Speak naturally using the cloned reference voice.',sampleDuration:profileData?.sampleDuration||5,notes,createdAt:Date.now(),provider:'pocket-tts',providerSampleBase64:sampleBase64,providerSampleMimeType:sampleBlob.type||'audio/webm'};
  }
  private localProfile(name:string,notes:string):ClonedVoiceProfile{throw new Error(`A real clone could not be created for ${name}.`)}
  private getRandomAvatarGradient(){const gradients=['from-cyan-500 to-blue-600','from-violet-500 to-purple-800','from-rose-500 to-pink-700','from-amber-500 to-red-700','from-emerald-500 to-teal-800','from-fuchsia-500 to-indigo-700'];return gradients[Math.floor(Math.random()*gradients.length)]}
