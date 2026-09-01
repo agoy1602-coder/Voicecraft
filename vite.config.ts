@@ -5,7 +5,8 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    base: '/Voicecraft/',
+    // GitHub Pages serves the app under /Voicecraft/, while Vercel serves it at the domain root.
+    base: process.env.VERCEL === '1' ? '/' : '/Voicecraft/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
