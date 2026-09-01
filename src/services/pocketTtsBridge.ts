@@ -6,9 +6,10 @@ import { ttsService } from './ttsService';
 
 let engine: PocketTTS | null = null;
 let enginePromise: Promise<PocketTTS> | null = null;
+const activeVoiceRefs = new Map<string, string>();
 
 async function getEngine(): Promise<PocketTTS> {
-  if (engine?.ready) return engine;
+  if (engine) return engine;
   if (enginePromise) return enginePromise;
   enginePromise = (async () => {
     const instance = new PocketTTS({
@@ -36,17 +37,20 @@ async function decodeReference(blob: Blob): Promise<{ audio: Float32Array; sampl
   const context = new AudioContext();
   try {
     const decoded = await context.decodeAudioData(await blob.arrayBuffer());
-    return {
-      audio: new Float32Array(decoded.getChannelData(0)),
-      sampleRate: decoded.sampleRate,
-      duration: decoded.duration,
-    };
+    return { audio: new Float32Array(decoded.getChannelData(0)), sampleRate: decoded.sampleRate, duration: decoded.duration };
   } finally {
     await context.close().catch(() => undefined);
   }
 }
 
-function makeProfile(name: string, voiceRef: string, sampleDuration: number, notes: string): ClonedVoiceProfile {
+async function base64ToBlob(base64: string, mimeType = 'audio/webm'): Promise<Blob> {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mimeType });
+}
+
+function makeProfile(name: string, voiceRef: string, sampleDuration: number, notes: string, sampleBase64: string, mimeType: string): ClonedVoiceProfile {
   return {
     id: `clone_pocket_${Date.now()}`,
     name,
@@ -68,17 +72,33 @@ function makeProfile(name: string, voiceRef: string, sampleDuration: number, not
     createdAt: Date.now(),
     provider: 'pocket-tts',
     providerVoiceId: voiceRef,
+    providerSampleBase64: sampleBase64,
+    providerSampleMimeType: mimeType,
   };
 }
 
 async function cloneLocally(name: string, blob: Blob, notes: string): Promise<ClonedVoiceProfile> {
   const tts = await getEngine();
   const decoded = await decodeReference(blob);
-  const voiceRef = await tts.cloneVoice(decoded.audio, {
-    inputSampleRate: decoded.sampleRate,
-    name,
-  });
-  return makeProfile(name, voiceRef, Number(decoded.duration.toFixed(2)), notes);
+  const voiceRef = await tts.cloneVoice(decoded.audio, { inputSampleRate: decoded.sampleRate, name });
+  const sampleBase64 = await blobToBase64(blob);
+  const profile = makeProfile(name, voiceRef, Number(decoded.duration.toFixed(2)), notes, sampleBase64, blob.type || 'audio/webm');
+  activeVoiceRefs.set(profile.id, voiceRef);
+  return profile;
+}
+
+async function ensureVoiceRef(voice: ClonedVoiceProfile): Promise<string> {
+  const cached = activeVoiceRefs.get(voice.id);
+  if (cached) return cached;
+  if (!voice.providerSampleBase64) {
+    throw new Error('This saved Pocket TTS voice has no encrypted reference sample. Please create the clone again.');
+  }
+  const tts = await getEngine();
+  const blob = await base64ToBlob(voice.providerSampleBase64, voice.providerSampleMimeType || 'audio/webm');
+  const decoded = await decodeReference(blob);
+  const voiceRef = await tts.cloneVoice(decoded.audio, { inputSampleRate: decoded.sampleRate, name: voice.name });
+  activeVoiceRefs.set(voice.id, voiceRef);
+  return voiceRef;
 }
 
 async function blobToBase64(blob: Blob): Promise<string> {
@@ -88,7 +108,7 @@ async function blobToBase64(blob: Blob): Promise<string> {
       const result = String(reader.result || '');
       resolve(result.includes(',') ? result.split(',')[1] : result);
     };
-    reader.onerror = () => reject(reader.error || new Error('Could not encode generated audio.'));
+    reader.onerror = () => reject(reader.error || new Error('Could not encode audio sample.'));
     reader.readAsDataURL(blob);
   });
 }
@@ -109,14 +129,13 @@ function sentenceTimings(text: string, duration: number): AudioSentence[] {
 async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> {
   const start = performance.now();
   const voice = options.voice as ClonedVoiceProfile;
-  if (voice.provider !== 'pocket-tts' || !voice.providerVoiceId) {
-    throw new Error('This cloned profile does not contain a browser-local Pocket TTS voice reference.');
-  }
+  if (voice.provider !== 'pocket-tts') throw new Error('This cloned profile is not a Pocket TTS voice.');
 
   const tts = await getEngine();
+  const voiceRef = await ensureVoiceRef(voice);
   const chunks: Float32Array[] = [];
   const metrics = await tts.generate(options.text, {
-    voice: voice.providerVoiceId,
+    voice: voiceRef,
     onChunk: (chunk) => chunks.push(new Float32Array(chunk)),
   });
   if (!chunks.length) throw new Error('Pocket TTS returned no audio for the cloned voice.');
@@ -161,8 +180,7 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
 
 export function installPocketTtsBridge(): void {
   const cloneService = voiceCloneService as any;
-  const originalClone = cloneService.analyzeAndClone.bind(cloneService);
-  cloneService.analyzeAndClone = async function(name: string, sampleBlob?: Blob, sampleBase64?: string, notes = '') {
+  cloneService.analyzeAndClone = async function(name: string, sampleBlob?: Blob, _sampleBase64?: string, notes = '') {
     if (!sampleBlob) throw new Error('A local audio sample is required for browser voice cloning.');
     try {
       return await cloneLocally(name, sampleBlob, notes);
@@ -175,9 +193,7 @@ export function installPocketTtsBridge(): void {
   const tts = ttsService as any;
   const originalGenerate = tts.generateSpeech.bind(tts);
   tts.generateSpeech = async function(options: TTSGenerateOptions) {
-    if (options.voice?.type === 'cloned' && (options.voice as ClonedVoiceProfile).provider === 'pocket-tts') {
-      return generateLocally(options);
-    }
+    if (options.voice?.type === 'cloned' && (options.voice as ClonedVoiceProfile).provider === 'pocket-tts') return generateLocally(options);
     return originalGenerate(options);
   };
 }
