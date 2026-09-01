@@ -19,7 +19,16 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['manifest.webmanifest'],
-        manifest: false,
+        manifest: {
+          name: 'VoiceCraft AI',
+          short_name: 'VoiceCraft',
+          description: 'Neural text-to-speech and local voice cloning studio with offline synthesis.',
+          start_url: `${appPath || ''}/`,
+          scope: `${appPath || ''}/`,
+          display: 'standalone',
+          background_color: '#020617',
+          theme_color: '#7c3aed',
+        },
         workbox: {
           navigateFallback: `${appPath}/index.html`,
           globPatterns: ['**/*.{js,css,html,svg,ico,png,webp}'],
