@@ -81,6 +81,14 @@ class TTSService {
   async generateSpeech(options: TTSGenerateOptions): Promise<TTSResult> {
     if (this.requestInProgress) throw new TTSServiceError('REQUEST_IN_PROGRESS', 'Speech generation is already running. Please wait for the current render to finish.');
     const startTime = performance.now();
+    const clonedVoice = options.voice as VoiceProfile & { provider?: string };
+
+    // A Pocket TTS clone is always local. Never route a cloned voice through
+    // Gemini just because the browser is online or Gemini has available quota.
+    if (options.voice.type === 'cloned' && clonedVoice.provider === 'pocket-tts') {
+      return this.generateOfflineSpeech(options, startTime, false, 0);
+    }
+
     const quota = this.getQuotaState();
     const shouldUseOffline = options.forceOffline === true || !navigator.onLine || quota.isQuotaActive;
     if (shouldUseOffline) {
