@@ -39,6 +39,17 @@ class SyncService {
     const userId = 'user_default';
 
     try {
+      // A startup sync can fire while React is still hydrating its voice state.
+      // Never interpret that temporary empty state as an intentional deletion.
+      if (voices.length === 0) {
+        try {
+          const persistedVoices = await storageService.loadClonedVoices();
+          if (persistedVoices.length > 0) voices = persistedVoices;
+        } catch {
+          // Keep the current state if local recovery is unavailable.
+        }
+      }
+
       // 1. Prepare Encrypted Records for Push
       const recordsToPush: any[] = [];
 

@@ -6,6 +6,7 @@ import {
   VoiceProfile,
 } from '../types';
 import { base64PcmToAudioBuffer, pcmToWavBlob } from './audioExport';
+import { pocketTtsService } from './pocketTtsService';
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || 'https://voicecraft-api.vercel.app').replace(/\/$/, '');
 const CLOUD_TIMEOUT_MS = 45000;
@@ -132,6 +133,58 @@ class TTSService {
   }
 
   async generateOfflineSpeech(options: TTSGenerateOptions, startTime: number, isQuotaFallback: boolean = false, retryAfterSeconds: number = 0): Promise<TTSResult> {
+    const clonedVoice = options.voice as VoiceProfile & { provider?: string; providerSampleBase64?: string; providerSampleMimeType?: string };
+
+    if (options.voice.type === 'cloned' && clonedVoice.provider === 'pocket-tts') {
+      if (!clonedVoice.providerSampleBase64) {
+        throw new TTSServiceError('OFFLINE', 'This saved clone has no reference sample. Export or re-record the voice to restore offline cloning.');
+      }
+
+      const restored = await pocketTtsService.restoreClonedVoice(
+        options.voice.id,
+        clonedVoice.providerSampleBase64,
+        clonedVoice.providerSampleMimeType || 'audio/webm',
+      );
+      const generated = await pocketTtsService.generate(options.text, options.voice.id, restored.voiceId);
+      const ctx = this.getAudioContext();
+      const wavBuffer = await generated.wavBlob.arrayBuffer();
+      const audioBuffer = await ctx.decodeAudioData(wavBuffer.slice(0));
+      const duration = audioBuffer.duration;
+      const blobUrl = URL.createObjectURL(generated.wavBlob);
+      const latencyMs = Math.round(performance.now() - startTime);
+      const sentences = this.calculateSentenceTimings(options.text, duration);
+      let audioBase64 = '';
+      try {
+        const bytes = new Uint8Array(wavBuffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+        audioBase64 = btoa(binary);
+      } catch {}
+
+      const clip: AudioClip = {
+        id: `clip_pocket_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        title: this.generateTitle(options.text),
+        text: options.text,
+        voiceId: options.voice.id,
+        voiceName: `${options.voice.name} (Pocket TTS Offline)`,
+        voiceType: options.voice.type,
+        tone: options.tone,
+        language: options.language,
+        durationSeconds: duration,
+        audioBlobUrl: blobUrl,
+        audioBase64,
+        format: 'wav',
+        sampleRate: generated.sampleRate,
+        sentences,
+        isOfflineGenerated: true,
+        createdAt: Date.now(),
+        isFavorite: false,
+        synced: false,
+        tags: ['pocket-tts', 'offline', options.tone, options.language],
+      };
+      return { clip, audioBuffer, isOffline: true, isQuotaFallback, retryAfterSeconds, latencyMs, engine: isQuotaFallback ? 'quota-fallback' : 'offline' };
+    }
+
     const ctx = this.getAudioContext();
     const estimatedDuration = Math.max(1.2, (options.text.split(' ').length * 0.42) / options.speed);
     const sampleRate = 24000;
