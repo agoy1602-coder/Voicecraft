@@ -1,10 +1,19 @@
 import { GoogleGenAI } from '@google/genai';
 
-const ALLOWED_ORIGIN = 'https://agoy1602-coder.github.io';
+const PRODUCTION_ORIGIN = 'https://agoy1602-coder.github.io';
 const TTS_MODEL = 'gemini-3.1-flash-tts-preview';
 
-function setCors(res: any) {
-  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+function setCors(req: any, res: any) {
+  const origin = req?.headers?.origin || '';
+  // Keep the public production frontend allowed, and allow only Voicecraft's
+  // own Vercel preview/production origins. Do not open the Gemini proxy to
+  // arbitrary websites.
+  const isVoicecraftVercelOrigin = /^https:\/\/voicecraft-[a-z0-9-]+-ago-y\.vercel\.app$/i.test(origin);
+  const allowedOrigin = origin === PRODUCTION_ORIGIN || isVoicecraftVercelOrigin
+    ? origin
+    : PRODUCTION_ORIGIN;
+
+  res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Access-Control-Max-Age', '86400');
@@ -24,7 +33,7 @@ function getRetryAfterSeconds(error: any) {
 
 export default async function handler(req: any, res: any) {
   const id = requestId();
-  setCors(res);
+  setCors(req, res);
   res.setHeader('X-VoiceCraft-Request-Id', id);
   res.setHeader('X-VoiceCraft-Engine', 'gemini-cloud');
 
