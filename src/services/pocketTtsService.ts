@@ -11,12 +11,19 @@ export interface PocketTTSSynthesisResult {
   metrics: { rtfx: number; genTime: number; audioDuration: number };
 }
 
+export interface PocketTTSLoadProgress {
+  label?: string;
+  loaded?: number;
+  total?: number;
+  fromCache?: boolean;
+}
+
 class PocketTTSService {
   private tts: PocketTTS | null = null;
   private loadPromise: Promise<PocketTTS> | null = null;
   private clonedVoices = new Map<string, string>();
 
-  private async getEngine(): Promise<PocketTTS> {
+  private async getEngine(onProgress?: (progress: PocketTTSLoadProgress) => void): Promise<PocketTTS> {
     if (this.tts) return this.tts;
     if (this.loadPromise) return this.loadPromise;
 
@@ -27,7 +34,9 @@ class PocketTTSService {
         voiceCloning: true,
         cache: true,
       });
-      await engine.load();
+      await engine.load((progress: PocketTTSLoadProgress) => {
+        onProgress?.(progress);
+      });
       this.tts = engine;
       return engine;
     })();
@@ -40,18 +49,34 @@ class PocketTTSService {
     }
   }
 
-  async cloneVoice(sampleBlob: Blob, voiceKey: string): Promise<PocketTTSCloneResult> {
-    const engine = await this.getEngine();
+  async cloneVoice(
+    sampleBlob: Blob,
+    voiceKey: string,
+    onProgress?: (progress: PocketTTSLoadProgress) => void,
+  ): Promise<PocketTTSCloneResult> {
+    const engine = await this.getEngine(onProgress);
     const buffer = await sampleBlob.arrayBuffer();
     const audioContext = new AudioContext();
     try {
+      onProgress?.({ label: 'Decoding vocal sample…' });
       const decoded = await audioContext.decodeAudioData(buffer);
       const mono = decoded.getChannelData(0);
-      const voiceId = await engine.cloneVoice(mono, {
+      onProgress?.({ label: 'Extracting voice characteristics…' });
+
+      const clonePromise = engine.cloneVoice(mono, {
         inputSampleRate: decoded.sampleRate,
         name: voiceKey,
       });
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        window.setTimeout(
+          () => reject(new Error('Voice cloning timed out after 5 minutes. The model may still be initializing on this device.')),
+          5 * 60 * 1000,
+        );
+      });
+      const voiceId = await Promise.race([clonePromise, timeoutPromise]);
+
       this.clonedVoices.set(voiceKey, voiceId);
+      onProgress?.({ label: 'Voice clone created successfully.' });
       return { voiceId, sampleRate: engine.sampleRate };
     } finally {
       await audioContext.close();
