@@ -5,8 +5,14 @@ import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
+  // GitHub Pages serves the app from /Voicecraft/, while the Vercel
+  // frontend serves it from the domain root. Keep both deployments valid.
+  const isVercel = process.env.VERCEL === '1';
+  const base = isVercel ? '/' : '/Voicecraft/';
+  const appPath = isVercel ? '' : '/Voicecraft';
+
   return {
-    base: '/Voicecraft/',
+    base,
     plugins: [
       react(),
       tailwindcss(),
@@ -15,7 +21,7 @@ export default defineConfig(() => {
         includeAssets: ['manifest.webmanifest'],
         manifest: false,
         workbox: {
-          navigateFallback: '/Voicecraft/index.html',
+          navigateFallback: `${appPath}/index.html`,
           globPatterns: ['**/*.{js,css,html,svg,ico,png,webp}'],
         },
       }),
