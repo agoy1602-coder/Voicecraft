@@ -1,8 +1,35 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import fs from 'fs';
 import path from 'path';
-import {defineConfig} from 'vite';
+import {defineConfig, type Plugin} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
+
+const OFFLINE_ORT_FILES = [
+  'ort.min.mjs',
+  'ort-wasm-simd-threaded.mjs',
+  'ort-wasm-simd-threaded.wasm',
+] as const;
+
+function offlineOrtRuntimePlugin(): Plugin {
+  return {
+    name: 'voicecraft-offline-ort-runtime',
+    generateBundle() {
+      const runtimeDir = path.resolve(__dirname, 'node_modules/onnxruntime-web/dist');
+      for (const fileName of OFFLINE_ORT_FILES) {
+        const sourcePath = path.join(runtimeDir, fileName);
+        if (!fs.existsSync(sourcePath)) {
+          throw new Error(`Missing ONNX Runtime Web asset: ${sourcePath}`);
+        }
+        this.emitFile({
+          type: 'asset',
+          fileName: `ort/${fileName}`,
+          source: fs.readFileSync(sourcePath),
+        });
+      }
+    },
+  };
+}
 
 export default defineConfig(() => {
   // GitHub Pages serves the app from /Voicecraft/, while the Vercel
@@ -16,6 +43,7 @@ export default defineConfig(() => {
     plugins: [
       react(),
       tailwindcss(),
+      offlineOrtRuntimePlugin(),
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['manifest.webmanifest'],
@@ -31,7 +59,7 @@ export default defineConfig(() => {
         },
         workbox: {
           navigateFallback: `${appPath}/index.html`,
-          globPatterns: ['**/*.{js,css,html,svg,ico,png,webp}'],
+          globPatterns: ['**/*.{js,css,html,mjs,wasm,svg,ico,png,webp}'],
         },
       }),
     ],
