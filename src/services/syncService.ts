@@ -93,7 +93,7 @@ class SyncService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,
-          sinceTimestamp: 0, // pull all to ensure consistency
+          sinceTimestamp: 0,
         }),
       });
 
@@ -122,7 +122,6 @@ class SyncService {
       clips.forEach((c) => mergedClipsMap.set(c.id, c));
       pulledClips.forEach((c) => {
         if (!mergedClipsMap.has(c.id)) {
-          // Rehydrate blob url if base64 available
           if (c.audioBase64) {
             try {
               const bin = atob(c.audioBase64);
@@ -184,23 +183,30 @@ class SyncService {
   }
 
   async getLinkedDevices(): Promise<LinkedDevice[]> {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return this.getLocalDeviceFallback();
+    }
     try {
       const res = await fetch('/api/sync/devices?userId=user_default');
       const data = await res.json();
       return data.devices || [];
     } catch {
-      return [
-        {
-          deviceId: storageService.getDeviceId(),
-          userId: 'user_default',
-          deviceName: 'Web Studio Browser',
-          deviceType: 'desktop',
-          lastSeen: Date.now(),
-          ipMasked: '127.0.0.1',
-          appVersion: 'v2.4.0',
-        },
-      ];
+      return this.getLocalDeviceFallback();
     }
+  }
+
+  private getLocalDeviceFallback(): LinkedDevice[] {
+    return [
+      {
+        deviceId: storageService.getDeviceId(),
+        userId: 'user_default',
+        deviceName: 'Web Studio Browser',
+        deviceType: 'desktop',
+        lastSeen: Date.now(),
+        ipMasked: '127.0.0.1',
+        appVersion: 'v2.4.0',
+      },
+    ];
   }
 
   async pairNewDevice(deviceName: string, deviceType: 'ios' | 'android' | 'desktop' | 'tablet'): Promise<LinkedDevice | null> {
