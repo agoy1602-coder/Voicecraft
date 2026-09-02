@@ -1,11 +1,9 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
+import {registerSW} from 'virtual:pwa-register';
 import { installPocketTtsBridge } from './services/pocketTtsBridge';
-import { startOfflineBootstrapDiagnostics } from './diagnostics/offlineBootstrapDiagnostics';
 import App from './App.tsx';
 import './index.css';
-
-startOfflineBootstrapDiagnostics();
 
 const root = createRoot(document.getElementById('root')!);
 root.render(
@@ -14,9 +12,9 @@ root.render(
   </StrictMode>,
 );
 
-// Diagnostic branch only: mount React first, then register the service worker.
-// This isolates whether pre-React SW registration contributes to offline-refresh failure.
-if ('serviceWorker' in navigator && sessionStorage.getItem('offline-sw-unregister-test') !== 'done') { navigator.serviceWorker.getRegistrations().then(async (registrations) => { sessionStorage.setItem('offline-sw-unregister-test', 'done'); await Promise.all(registrations.map((registration) => registration.unregister())); location.reload(); }); }
+// Register the service worker only after React has mounted. SW registration
+// must never be part of the critical UI bootstrap path.
 queueMicrotask(() => {
+  registerSW({ immediate: false });
   installPocketTtsBridge();
 });
