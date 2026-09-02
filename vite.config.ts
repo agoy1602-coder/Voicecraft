@@ -45,6 +45,7 @@ export default defineConfig(() => {
       tailwindcss(),
       offlineOrtRuntimePlugin(),
       VitePWA({
+        injectRegister: null,
         registerType: 'autoUpdate',
         includeAssets: ['manifest.webmanifest'],
         manifest: {
