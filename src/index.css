@@ -1,1 +1,13 @@
 @import "tailwindcss";
+
+/*
+ * Vercel Preview Toolbar is injected outside #root as <vercel-live-feedback>.
+ * It is useful for deployment feedback, but it is not part of VoiceCraft and
+ * must never sit in the page hit-test layer. Keep the app's pointer events
+ * isolated from platform UI so preview tooling cannot make the entire SPA
+ * appear frozen.
+ */
+vercel-live-feedback {
+  display: none !important;
+  pointer-events: none !important;
+}
