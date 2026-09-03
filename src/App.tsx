@@ -16,6 +16,7 @@ import { ttsService, TTSGenerateOptions } from './services/ttsService';
 import { syncService } from './services/syncService';
 import { notificationService } from './services/notificationService';
 import { cryptoService } from './services/crypto';
+import { cloneLifecycleDiagnostics } from './services/cloneLifecycleDiagnostics';
 
 export default function App() {
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
@@ -126,7 +127,13 @@ export default function App() {
     setClonedVoices(updated);
     setActiveTab('studio');
     notificationService.notify('Voice Clone Ready', `Personalized vocal profile \"${newVoice.name}\" has been created. Saving securely in the background.`, 'security_alert');
-    void storageService.saveClonedVoices(updated).catch((err) => {
+    const saveStarted = performance.now();
+    cloneLifecycleDiagnostics.record('onAddClonedVoice START', 0);
+    void storageService.saveClonedVoices(updated).then(() => {
+      cloneLifecycleDiagnostics.record('saveClonedVoices END', performance.now() - saveStarted);
+      cloneLifecycleDiagnostics.record('CREATE CLONE LIFECYCLE COMPLETE', performance.now() - saveStarted);
+    }).catch((err) => {
+      cloneLifecycleDiagnostics.record('saveClonedVoices ERROR', performance.now() - saveStarted);
       notificationService.notify('Voice Clone Save Delayed', err?.message || 'The clone was created, but local persistence needs another attempt.', 'offline_status');
     });
   };
@@ -148,7 +155,7 @@ export default function App() {
     {startupTotalMs !== null && <div className="fixed bottom-3 left-3 right-3 z-[100] max-w-md mx-auto rounded-xl border border-violet-400/40 bg-slate-950/95 text-slate-100 p-3 shadow-2xl backdrop-blur text-xs font-mono"><div className="font-bold text-violet-300 mb-2">VoiceCraft Startup Diagnostic</div><div className="space-y-1">{Object.entries(startupTimings).map(([label, ms]) => <div key={label} className="flex justify-between gap-3"><span className="truncate">{label}</span><span className="font-bold">{ms}ms</span></div>)}<div className="border-t border-slate-700 pt-1 mt-1 flex justify-between"><span>TOTAL</span><span className="font-bold">{startupTotalMs}ms</span></div></div><div className="mt-2 text-slate-400">Diagnostic only — clone behavior unchanged.</div></div>}
     <Header settings={settings} onUpdateSettings={handleUpdateSettings} isOnline={isOnline} onToggleOnlineMode={() => setIsOnline(!isOnline)} onOpenE2EEModal={() => setIsE2EEOpen(true)} onOpenSyncModal={() => setIsSyncOpen(true)} onOpenFeedbackModal={() => setIsFeedbackOpen(true)} onOpenNotifications={() => setIsNotifsOpen(true)} onOpenSettings={() => setIsSettingsOpen(true)} unreadNotifsCount={unreadCount} activeTab={activeTab} onChangeTab={setActiveTab} />
     <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
-      {!isOnline && <div className="bg-amber-950/50 border border-amber-500/40 rounded-xl p-3.5 flex items-center justify-between gap-3 text-amber-200 text-xs"><div className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" /><span className="font-semibold">Offline Mode Active: Utilizing local client synthesis & cached acoustic vault.</span></div><button onClick={() => setIsOnline(true)} className="px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold border border-amber-500/40 transition-colors">Re-enable Online</button></div>}
+      {!isOnline && <div className="bg-amber-950/50 border border-amber-500/40 rounded-xl p-3.5 flex items-center justify-between gap-3 text-amber-200 text-xs"><div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" /><span className="font-semibold">Offline Mode Active: Utilizing local client synthesis & cached acoustic vault.</span></div><button onClick={() => setIsOnline(true)} className="px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold border border-amber-500/40 transition-colors">Re-enable Online</button></div>}
       {activeTab === 'studio' && <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start"><div className="lg:col-span-7 flex flex-col gap-6"><TTSStudio clonedVoices={clonedVoices} onGenerate={handleGenerateSpeech} onBulkComplete={handleBulkCompletePlaylist} isGenerating={isGenerating} lastLatencyMs={lastLatencyMs} isOnline={isOnline} /></div><div className="lg:col-span-5 flex flex-col gap-6 sticky top-20"><AudioPlayerWaveform clip={currentClip} playlist={currentPlaylist} onToggleFavorite={handleToggleFavorite} onOpenExportModal={(c) => setExportModalClip(c)} onSelectClip={(c) => setCurrentClip(c)} /></div></div>}
       {activeTab === 'clone' && <div className="flex flex-col gap-6"><VoiceCloningStudio clonedVoices={clonedVoices} onAddClonedVoice={handleAddClonedVoice} onDeleteClonedVoice={handleDeleteClonedVoice} onSelectForTTS={handleSelectVoiceForTTS} sampleDuration={settings.sampleRecordingDuration || 5} onOpenSettings={() => setIsSettingsOpen(true)} /></div>}
       {activeTab === 'library' && <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start"><div className="lg:col-span-7 flex flex-col gap-6"><AudioLibrary clips={clips} playlists={playlists} onSelectClip={(c) => setCurrentClip(c)} onSelectPlaylist={(p) => { setCurrentPlaylist(p); if (p.mergedClip) setCurrentClip(p.mergedClip); else if (p.blocks[0]?.clip) setCurrentClip(p.blocks[0].clip); }} onToggleFavorite={handleToggleFavorite} onDeleteClip={handleDeleteClip} onDeletePlaylist={handleDeletePlaylist} onOpenExportModal={(c) => setExportModalClip(c)} currentPlayingId={currentClip?.id} /></div><div className="lg:col-span-5 flex flex-col gap-6 sticky top-20"><AudioPlayerWaveform clip={currentClip} playlist={currentPlaylist} onToggleFavorite={handleToggleFavorite} onOpenExportModal={(c) => setExportModalClip(c)} onSelectClip={(c) => setCurrentClip(c)} /></div></div>}
