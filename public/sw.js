@@ -1,4 +1,5 @@
 const CACHE_NAME = 'voicecraft-offline-shell-v2';
+const CACHE_PREFIX = 'voicecraft-offline-shell-';
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -18,7 +19,13 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)));
+    // Only remove previous VoiceCraft offline-shell versions. Never delete
+    // unrelated application caches, including Pocket TTS's own model cache.
+    await Promise.all(
+      keys
+        .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
+        .map((key) => caches.delete(key)),
+    );
     await self.clients.claim();
   })());
 });
