@@ -27,6 +27,14 @@ class PocketTTSService {
   private loadProgressListeners = new Set<(progress: PocketTTSLoadProgress) => void>();
   private clonedVoices = new Map<string, string>();
 
+  constructor() {
+    // Start model initialization as soon as the browser imports this service.
+    // Create Clone can then reuse the same promise instead of appearing frozen on first use.
+    if (typeof window !== 'undefined') {
+      void this.preload().catch(() => undefined);
+    }
+  }
+
   private emitProgress(progress: PocketTTSLoadProgress) {
     for (const listener of this.loadProgressListeners) listener(progress);
   }
