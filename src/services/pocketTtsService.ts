@@ -18,11 +18,28 @@ export interface PocketTTSLoadProgress {
   fromCache?: boolean;
 }
 
+const ENGINE_LOAD_TIMEOUT_MS = 6 * 60 * 1000;
+const CLONE_TIMEOUT_MS = 5 * 60 * 1000;
+
 class PocketTTSService {
   private tts: PocketTTS | null = null;
   private loadPromise: Promise<PocketTTS> | null = null;
   private loadProgressListeners = new Set<(progress: PocketTTSLoadProgress) => void>();
   private clonedVoices = new Map<string, string>();
+
+  private emitProgress(progress: PocketTTSLoadProgress) {
+    for (const listener of this.loadProgressListeners) listener(progress);
+  }
+
+  private withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+    let timer: number | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(() => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    });
+  }
 
   private async getEngine(onProgress?: (progress: PocketTTSLoadProgress) => void): Promise<PocketTTS> {
     if (this.tts) return this.tts;
@@ -37,6 +54,7 @@ class PocketTTSService {
     }
 
     this.loadPromise = (async () => {
+      this.emitProgress({ label: 'Starting Pocket TTS engine…' });
       const engine = new PocketTTS({
         language: 'english_2026-04',
         quantized: true,
@@ -44,9 +62,13 @@ class PocketTTSService {
         cache: true,
       });
 
-      await engine.load((progress: PocketTTSLoadProgress) => {
-        for (const listener of this.loadProgressListeners) listener(progress);
-      });
+      this.emitProgress({ label: 'Loading Pocket TTS voice-cloning model…' });
+      await this.withTimeout(
+        engine.load((progress: PocketTTSLoadProgress) => this.emitProgress(progress)),
+        ENGINE_LOAD_TIMEOUT_MS,
+        'Pocket TTS model loading timed out after 6 minutes. The voice-cloning model could not finish initializing on this device.',
+      );
+      this.emitProgress({ label: 'Pocket TTS engine ready.' });
       this.tts = engine;
       return engine;
     })();
@@ -55,10 +77,15 @@ class PocketTTSService {
       return await this.loadPromise;
     } catch (error) {
       this.loadPromise = null;
+      this.tts = null;
       throw error;
     } finally {
       if (onProgress) this.loadProgressListeners.delete(onProgress);
     }
+  }
+
+  async preload(onProgress?: (progress: PocketTTSLoadProgress) => void): Promise<void> {
+    await this.getEngine(onProgress);
   }
 
   async cloneVoice(
@@ -73,19 +100,13 @@ class PocketTTSService {
       onProgress?.({ label: 'Decoding vocal sample…' });
       const decoded = await audioContext.decodeAudioData(buffer);
       const mono = decoded.getChannelData(0);
-      onProgress?.({ label: 'Extracting voice characteristics…' });
+      onProgress?.({ label: 'Extracting voice characteristics with neural encoder…' });
 
-      const clonePromise = engine.cloneVoice(mono, {
-        inputSampleRate: decoded.sampleRate,
-        name: voiceKey,
-      });
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        window.setTimeout(
-          () => reject(new Error('Voice cloning timed out after 5 minutes. The model may still be initializing on this device.')),
-          5 * 60 * 1000,
-        );
-      });
-      const voiceId = await Promise.race([clonePromise, timeoutPromise]);
+      const voiceId = await this.withTimeout(
+        engine.cloneVoice(mono, { inputSampleRate: decoded.sampleRate, name: voiceKey }),
+        CLONE_TIMEOUT_MS,
+        'Voice cloning timed out after 5 minutes. The neural voice encoder did not finish on this device.',
+      );
 
       this.clonedVoices.set(voiceKey, voiceId);
       onProgress?.({ label: 'Voice clone created successfully.' });
