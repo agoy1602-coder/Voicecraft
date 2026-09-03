@@ -38,10 +38,17 @@ export default function App() {
   const [isNotifsOpen, setIsNotifsOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [exportModalClip, setExportModalClip] = useState<AudioClip | null>(null);
+  const [startupTimings, setStartupTimings] = useState<Record<string, number>>({});
+  const [startupTotalMs, setStartupTotalMs] = useState<number | null>(null);
 
   useEffect(() => {
     async function initApp() {
-      const trace = (label: string, start: number) => console.info(`[VoiceCraft startup] ${label}: ${Math.round(performance.now() - start)}ms`);
+      const appStart = performance.now();
+      const trace = (label: string, start: number) => {
+        const elapsed = Math.round(performance.now() - start);
+        setStartupTimings((prev) => ({ ...prev, [label]: elapsed }));
+        console.info(`[VoiceCraft startup] ${label}: ${elapsed}ms`);
+      };
       console.info('[VoiceCraft startup] begin');
 
       let step = performance.now();
@@ -77,6 +84,9 @@ export default function App() {
       trace(`getLinkedDevices (${linkedDevices.length} devices)`, step);
       setDevices(linkedDevices);
       setLastSyncedAt(storageService.getLastSyncTime());
+      const total = Math.round(performance.now() - appStart);
+      setStartupTotalMs(total);
+      console.info(`[VoiceCraft startup] TOTAL: ${total}ms`);
       console.info(`[VoiceCraft startup] COMPLETE: ${Math.round(performance.now())}ms performance timeline`);
     }
     initApp();
@@ -135,6 +145,7 @@ export default function App() {
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   return (<div className={`min-h-screen ${settings.darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'} font-sans selection:bg-violet-500 selection:text-white transition-colors duration-200`}>
+    {startupTotalMs !== null && <div className="fixed bottom-3 left-3 right-3 z-[100] max-w-md mx-auto rounded-xl border border-violet-400/40 bg-slate-950/95 text-slate-100 p-3 shadow-2xl backdrop-blur text-xs font-mono"><div className="font-bold text-violet-300 mb-2">VoiceCraft Startup Diagnostic</div><div className="space-y-1">{Object.entries(startupTimings).map(([label, ms]) => <div key={label} className="flex justify-between gap-3"><span className="truncate">{label}</span><span className="font-bold">{ms}ms</span></div>)}<div className="border-t border-slate-700 pt-1 mt-1 flex justify-between"><span>TOTAL</span><span className="font-bold">{startupTotalMs}ms</span></div></div><div className="mt-2 text-slate-400">Diagnostic only — clone behavior unchanged.</div></div>}
     <Header settings={settings} onUpdateSettings={handleUpdateSettings} isOnline={isOnline} onToggleOnlineMode={() => setIsOnline(!isOnline)} onOpenE2EEModal={() => setIsE2EEOpen(true)} onOpenSyncModal={() => setIsSyncOpen(true)} onOpenFeedbackModal={() => setIsFeedbackOpen(true)} onOpenNotifications={() => setIsNotifsOpen(true)} onOpenSettings={() => setIsSettingsOpen(true)} unreadNotifsCount={unreadCount} activeTab={activeTab} onChangeTab={setActiveTab} />
     <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
       {!isOnline && <div className="bg-amber-950/50 border border-amber-500/40 rounded-xl p-3.5 flex items-center justify-between gap-3 text-amber-200 text-xs"><div className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" /><span className="font-semibold">Offline Mode Active: Utilizing local client synthesis & cached acoustic vault.</span></div><button onClick={() => setIsOnline(true)} className="px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold border border-amber-500/40 transition-colors">Re-enable Online</button></div>}
