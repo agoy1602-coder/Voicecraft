@@ -126,6 +126,8 @@ export const VoiceCloningStudio: React.FC<VoiceCloningStudioProps> = ({
   };
 
   const handleCreateClone = async () => {
+    const lifecycleStart = performance.now();
+    setAnalysisStatus('CREATE CLONE CLICK DETECTED');
     if (!voiceName.trim()) {
       setErrorMessage('Please provide a name for this custom voice clone.');
       return;
@@ -135,28 +137,33 @@ export const VoiceCloningStudio: React.FC<VoiceCloningStudioProps> = ({
       return;
     }
     setIsAnalyzing(true);
-    setAnalysisStatus('Creating local Pocket TTS voice profile...');
+    setAnalysisStatus(`CREATE CLONE CLICK → validation passed (${Math.round(performance.now() - lifecycleStart)}ms)`);
     setErrorMessage('');
     try {
+      setAnalysisStatus(`analyzeAndClone START (${Math.round(performance.now() - lifecycleStart)}ms)`);
       const cloneProfile = await voiceCloneService.analyzeAndClone(
         voiceName.trim(),
         recordedBlob || undefined,
         recordedBase64 || undefined,
         notes.trim()
       );
-      // Complete the Create Clone UI lifecycle immediately. Pocket TTS conditioning
-      // remains lazy so model initialization cannot hold this button hostage.
+      setAnalysisStatus(`analyzeAndClone END (${Math.round(performance.now() - lifecycleStart)}ms)`);
+      // Measure the exact callback boundary. If this status remains visible,
+      // the parent onAddClonedVoice callback is the blocking operation.
+      setAnalysisStatus(`onAddClonedVoice START (${Math.round(performance.now() - lifecycleStart)}ms)`);
       onAddClonedVoice(cloneProfile);
+      setAnalysisStatus(`onAddClonedVoice END (${Math.round(performance.now() - lifecycleStart)}ms)`);
       setIsAnalyzing(false);
       setVoiceName('');
       setNotes('');
       setRecordedBlob(null);
       setRecordedBase64('');
       setRecordingTime(0);
-      setAnalysisStatus('');
+      setAnalysisStatus(`CREATE CLONE COMPLETE (${Math.round(performance.now() - lifecycleStart)}ms)`);
     } catch (err: any) {
       setIsAnalyzing(false);
       setErrorMessage(err.message || 'Failed to clone voice.');
+      setAnalysisStatus(`CREATE CLONE ERROR (${Math.round(performance.now() - lifecycleStart)}ms)`);
     }
   };
 
