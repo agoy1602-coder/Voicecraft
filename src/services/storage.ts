@@ -53,15 +53,9 @@ class StorageService {
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
-        if (!db.objectStoreNames.contains(STORE_CLIPS)) {
-          db.createObjectStore(STORE_CLIPS, { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains(STORE_VOICES)) {
-          db.createObjectStore(STORE_VOICES, { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains(STORE_KV)) {
-          db.createObjectStore(STORE_KV, { keyPath: 'key' });
-        }
+        if (!db.objectStoreNames.contains(STORE_CLIPS)) db.createObjectStore(STORE_CLIPS, { keyPath: 'id' });
+        if (!db.objectStoreNames.contains(STORE_VOICES)) db.createObjectStore(STORE_VOICES, { keyPath: 'id' });
+        if (!db.objectStoreNames.contains(STORE_KV)) db.createObjectStore(STORE_KV, { keyPath: 'key' });
       };
 
       request.onsuccess = () => resolve(request.result);
@@ -77,11 +71,8 @@ class StorageService {
       if (legacyClips) {
         try {
           let parsed: AudioClip[] = [];
-          if (legacyClips.startsWith('{') && legacyClips.includes('ciphertext')) {
-            parsed = await cryptoService.decrypt(legacyClips);
-          } else {
-            parsed = JSON.parse(legacyClips);
-          }
+          if (legacyClips.startsWith('{') && legacyClips.includes('ciphertext')) parsed = await cryptoService.decrypt(legacyClips);
+          else parsed = JSON.parse(legacyClips);
           if (Array.isArray(parsed) && parsed.length > 0) await this.saveAudioClips(parsed);
         } catch {}
         localStorage.removeItem(STORAGE_KEYS.AUDIO_CLIPS);
@@ -91,11 +82,8 @@ class StorageService {
       if (legacyVoices) {
         try {
           let parsed: ClonedVoiceProfile[] = [];
-          if (legacyVoices.startsWith('{') && legacyVoices.includes('ciphertext')) {
-            parsed = await cryptoService.decrypt(legacyVoices);
-          } else {
-            parsed = JSON.parse(legacyVoices);
-          }
+          if (legacyVoices.startsWith('{') && legacyVoices.includes('ciphertext')) parsed = await cryptoService.decrypt(legacyVoices);
+          else parsed = JSON.parse(legacyVoices);
           if (Array.isArray(parsed) && parsed.length > 0) await this.saveClonedVoices(parsed);
         } catch {}
         localStorage.removeItem(STORAGE_KEYS.CLONED_VOICES);
@@ -116,9 +104,7 @@ class StorageService {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
       return data ? { ...DEFAULT_SETTINGS, ...JSON.parse(data) } : DEFAULT_SETTINGS;
-    } catch {
-      return DEFAULT_SETTINGS;
-    }
+    } catch { return DEFAULT_SETTINGS; }
   }
 
   saveSettings(settings: UserSettings): void {
@@ -132,7 +118,6 @@ class StorageService {
         const tx = db.transaction(STORE_VOICES, 'readonly');
         const store = tx.objectStore(STORE_VOICES);
         const req = store.getAll();
-
         req.onsuccess = async () => {
           const records = req.result || [];
           const voices: ClonedVoiceProfile[] = [];
@@ -144,26 +129,20 @@ class StorageService {
               } catch {
                 if (item.id) voices.push(item);
               }
-            } else if (item.id) {
-              voices.push(item);
-            }
+            } else if (item.id) voices.push(item);
           }
           resolve(voices);
         };
         req.onerror = () => resolve([]);
       });
-    } catch {
-      return [];
-    }
+    } catch { return []; }
   }
 
   async saveClonedVoices(voices: ClonedVoiceProfile[]): Promise<void> {
     try {
       const db = await this.initDatabase();
-
-      // Encrypt before opening the read/write transaction. Awaiting crypto work
-      // inside an IndexedDB transaction can let the transaction auto-commit
-      // before store.put() runs, silently losing the persisted voice.
+      // Web Crypto is asynchronous. Finish encryption before opening the
+      // IndexedDB transaction so it cannot auto-commit while awaiting crypto.
       const encryptedRecords = await Promise.all(
         voices.map(async (voice) => ({
           id: voice.id,
@@ -182,8 +161,9 @@ class StorageService {
         tx.onerror = () => reject(tx.error || new Error('Failed to persist cloned voices'));
         tx.onabort = () => reject(tx.error || new Error('Cloned voice persistence transaction aborted'));
       });
-    } catch {
-      // Storage fallback
+    } catch (error) {
+      console.error('[VoiceCraft] Failed to persist cloned voices:', error);
+      throw error;
     }
   }
 
@@ -227,36 +207,52 @@ class StorageService {
     this.memoryClipsCache = clips;
     try {
       const db = await this.initDatabase();
-      const tx = db.transaction(STORE_CLIPS, 'readwrite');
-      const store = tx.objectStore(STORE_CLIPS);
-      store.clear();
-      for (const clip of clips) {
+      const encryptedRecords = await Promise.all(clips.map(async (clip) => {
         const serializableClip: AudioClip = { ...clip, audioBlobUrl: '' };
-        const encrypted = await cryptoService.encrypt(serializableClip);
-        store.put({ id: clip.id, encryptedData: JSON.stringify(encrypted), createdAt: clip.createdAt, title: clip.title, audioBase64: clip.audioBase64 });
-      }
-    } catch {}
+        return { id: clip.id, encryptedData: JSON.stringify(await cryptoService.encrypt(serializableClip)), createdAt: clip.createdAt, title: clip.title, audioBase64: clip.audioBase64 };
+      }));
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(STORE_CLIPS, 'readwrite');
+        const store = tx.objectStore(STORE_CLIPS);
+        store.clear();
+        for (const record of encryptedRecords) store.put(record);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error || new Error('Failed to persist audio clips'));
+        tx.onabort = () => reject(tx.error || new Error('Audio clip persistence transaction aborted'));
+      });
+    } catch (error) {
+      console.error('[VoiceCraft] Failed to persist audio clips:', error);
+    }
   }
 
   async saveSingleClip(clip: AudioClip): Promise<void> {
     try {
       this.memoryClipsCache = [clip, ...this.memoryClipsCache.filter((c) => c.id !== clip.id)];
       const db = await this.initDatabase();
-      const tx = db.transaction(STORE_CLIPS, 'readwrite');
-      const store = tx.objectStore(STORE_CLIPS);
       const serializableClip: AudioClip = { ...clip, audioBlobUrl: '' };
       const encrypted = await cryptoService.encrypt(serializableClip);
-      store.put({ id: clip.id, encryptedData: JSON.stringify(encrypted), createdAt: clip.createdAt, title: clip.title, audioBase64: clip.audioBase64 });
-    } catch {}
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(STORE_CLIPS, 'readwrite');
+        tx.objectStore(STORE_CLIPS).put({ id: clip.id, encryptedData: JSON.stringify(encrypted), createdAt: clip.createdAt, title: clip.title, audioBase64: clip.audioBase64 });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error || new Error('Failed to persist audio clip'));
+        tx.onabort = () => reject(tx.error || new Error('Audio clip persistence transaction aborted'));
+      });
+    } catch (error) { console.error('[VoiceCraft] Failed to persist audio clip:', error); }
   }
 
   async deleteAudioClip(id: string): Promise<void> {
     try {
       this.memoryClipsCache = this.memoryClipsCache.filter((c) => c.id !== id);
       const db = await this.initDatabase();
-      const tx = db.transaction(STORE_CLIPS, 'readwrite');
-      tx.objectStore(STORE_CLIPS).delete(id);
-    } catch {}
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(STORE_CLIPS, 'readwrite');
+        tx.objectStore(STORE_CLIPS).delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error || new Error('Failed to delete audio clip'));
+        tx.onabort = () => reject(tx.error || new Error('Audio clip delete transaction aborted'));
+      });
+    } catch (error) { console.error('[VoiceCraft] Failed to delete audio clip:', error); }
   }
 
   loadNotifications(): AppNotification[] {
@@ -271,10 +267,7 @@ class StorageService {
   }
 
   getLastSyncTime(): number {
-    try {
-      const t = localStorage.getItem(STORAGE_KEYS.LAST_SYNC);
-      return t ? parseInt(t, 10) : 0;
-    } catch { return 0; }
+    try { const t = localStorage.getItem(STORAGE_KEYS.LAST_SYNC); return t ? parseInt(t, 10) : 0; } catch { return 0; }
   }
 
   setLastSyncTime(time: number): void {
@@ -303,10 +296,7 @@ class StorageService {
       }
       return Array.isArray(playlists) ? playlists : [];
     } catch {
-      try {
-        const ls = localStorage.getItem(STORAGE_KEYS.PROJECT_PLAYLISTS);
-        return ls ? JSON.parse(ls) : [];
-      } catch { return []; }
+      try { const ls = localStorage.getItem(STORAGE_KEYS.PROJECT_PLAYLISTS); return ls ? JSON.parse(ls) : []; } catch { return []; }
     }
   }
 
@@ -317,17 +307,21 @@ class StorageService {
         blocks: p.blocks.map((b) => ({ ...b, clip: b.clip ? { ...b.clip, audioBlobUrl: '' } : undefined })),
         mergedClip: p.mergedClip ? { ...p.mergedClip, audioBlobUrl: '' } : undefined,
       }));
-      const db = await this.initDatabase();
-      const tx = db.transaction(STORE_KV, 'readwrite');
-      const store = tx.objectStore(STORE_KV);
       const encrypted = await cryptoService.encrypt(sanitized);
-      store.put({ key: 'project_playlists', value: JSON.stringify(encrypted) });
+      const db = await this.initDatabase();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(STORE_KV, 'readwrite');
+        tx.objectStore(STORE_KV).put({ key: 'project_playlists', value: JSON.stringify(encrypted) });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error || new Error('Failed to persist playlists'));
+        tx.onabort = () => reject(tx.error || new Error('Playlist persistence transaction aborted'));
+      });
       localStorage.setItem(STORAGE_KEYS.PROJECT_PLAYLISTS, JSON.stringify(sanitized.map((p) => ({
         ...p,
         blocks: p.blocks.map((b) => ({ ...b, clip: b.clip ? { ...b.clip, audioBase64: undefined, audioBlobUrl: '' } : undefined })),
         mergedClip: p.mergedClip ? { ...p.mergedClip, audioBase64: undefined, audioBlobUrl: '' } : undefined,
       }))));
-    } catch {}
+    } catch (error) { console.error('[VoiceCraft] Failed to persist playlists:', error); }
   }
 
   async saveSingleProjectPlaylist(playlist: ProjectPlaylist): Promise<void> {
