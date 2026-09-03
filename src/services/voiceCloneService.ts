@@ -1,4 +1,5 @@
 import { ClonedVoiceProfile } from '../types';
+import { traceCreateClone } from './createCloneDiagnostics';
 
 class VoiceCloneService {
   private mediaRecorder: MediaRecorder | null = null;
@@ -70,17 +71,20 @@ class VoiceCloneService {
     sampleBase64?: string,
     notes = ''
   ): Promise<ClonedVoiceProfile> {
+    traceCreateClone('analyze-start', { hasBlob: !!sampleBlob, hasBase64: !!sampleBase64 });
     if (!sampleBlob) {
+      traceCreateClone('analyze-validation-failed', { reason: 'missing-blob' });
       throw new Error('A voice recording is required to create a real clone.');
     }
     if (!sampleBase64) {
+      traceCreateClone('analyze-validation-failed', { reason: 'missing-base64' });
       throw new Error('The recorded voice sample could not be saved. Please record it again.');
     }
 
     // Create Clone must be fully local and deterministic for free users.
     // Do not load Pocket TTS here and do not call a paid/cloud voice provider.
     // Pocket TTS conditioning happens lazily when the cloned voice is first used.
-    return {
+    const profile: ClonedVoiceProfile = {
       id: `clone_${Date.now()}`,
       name,
       type: 'cloned',
@@ -103,6 +107,8 @@ class VoiceCloneService {
       providerSampleBase64: sampleBase64,
       providerSampleMimeType: sampleBlob.type || 'audio/webm'
     };
+    traceCreateClone('analyze-return', { id: profile.id });
+    return profile;
   }
 
   private getRandomAvatarGradient() {
