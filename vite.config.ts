@@ -46,6 +46,8 @@ export default defineConfig(() => {
       offlineOrtRuntimePlugin(),
       VitePWA({
         registerType: 'autoUpdate',
+        injectRegister: 'auto',
+        filename: 'sw.js',
         includeAssets: ['manifest.webmanifest'],
         manifest: {
           name: 'VoiceCraft AI',
@@ -58,6 +60,9 @@ export default defineConfig(() => {
           theme_color: '#7c3aed',
         },
         workbox: {
+          clientsClaim: true,
+          skipWaiting: true,
+          cleanupOutdatedCaches: true,
           navigateFallback: `${appPath}/index.html`,
           globPatterns: ['**/*.{js,css,html,mjs,wasm,svg,ico,png,webp}'],
           maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
