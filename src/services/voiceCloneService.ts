@@ -10,12 +10,15 @@ class VoiceCloneService{
  async analyzeAndClone(name:string,sampleBlob?:Blob,sampleBase64?:string,notes='',onProgress?:(progress:PocketTTSLoadProgress)=>void):Promise<ClonedVoiceProfile>{
    if(!sampleBlob) throw new Error('A voice recording is required to create a real clone.');
    const voiceKey=`${name}_${Date.now()}`;
+   console.info('[VoiceCloneTrace] ANALYZE_ENTER',voiceKey);
+   onProgress?.({label:'Trace: analyzeAndClone entered.'});
    let pocketClone:{voiceId:string;sampleRate:number};
-   try{pocketClone=await pocketTtsService.cloneVoice(sampleBlob,voiceKey,onProgress);}catch(error){const message=error instanceof Error?error.message:String(error);throw new Error(`Real browser voice cloning failed: ${message}`);}
+   try{pocketClone=await pocketTtsService.cloneVoice(sampleBlob,voiceKey,onProgress);console.info('[VoiceCloneTrace] POCKET_CLONE_RETURN',pocketClone.voiceId);}catch(error){const message=error instanceof Error?error.message:String(error);console.error('[VoiceCloneTrace] POCKET_CLONE_ERROR',message);throw new Error(`Real browser voice cloning failed: ${message}`);}
 
    let profileData:any=null;
-   if(navigator.onLine&&sampleBase64){try{const res=await fetch(`${API_BASE_URL}/api/voice-clone/analyze`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,sampleBase64,mimeType:sampleBlob.type||'audio/webm',audioDurationSeconds:5,notes})});if(res.ok){const data=await res.json();if(data.success&&data.profile)profileData=data.profile;}}catch{}}
+   if(navigator.onLine&&sampleBase64){onProgress?.({label:'Trace: local clone complete; optional online profile analysis starting…'});try{const res=await fetch(`${API_BASE_URL}/api/voice-clone/analyze`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,sampleBase64,mimeType:sampleBlob.type||'audio/webm',audioDurationSeconds:5,notes})});if(res.ok){const data=await res.json();if(data.success&&data.profile)profileData=data.profile;}}catch{}}
 
+   onProgress?.({label:'Trace: analyzeAndClone returned; clone profile ready.'});
    return {id:profileData?.id||`clone_${Date.now()}`,name:profileData?.name||name,type:'cloned',gender:profileData?.gender||'neutral',tone:profileData?.dominantTone||'professional',baseVoice:profileData?.recommendedBaseVoice||'Zephyr',description:profileData?.timbreDescription||`Browser-cloned voice for ${name}`,avatarColor:this.getRandomAvatarGradient(),pitchShift:profileData?.pitchShiftOffset||0,speedFactor:profileData?.speedFactor||1,warmth:profileData?.resonanceFactor?Math.min(1,profileData.resonanceFactor*.7):.8,breathiness:profileData?.breathiness||.1,basePitchHz:profileData?.basePitchHz||160,timbreDescription:profileData?.timbreDescription||'Voice cloned locally in the browser with Pocket TTS.',promptModifier:profileData?.promptModifier||'Speak naturally using the cloned reference voice.',sampleDuration:profileData?.sampleDuration||5,notes,createdAt:Date.now(),provider:'pocket-tts',providerVoiceId:pocketClone.voiceId,providerSampleBase64:sampleBase64,providerSampleMimeType:sampleBlob.type||'audio/webm'};
  }
  private localProfile(name:string,notes:string):ClonedVoiceProfile{throw new Error(`A real clone could not be created for ${name}.`)}
