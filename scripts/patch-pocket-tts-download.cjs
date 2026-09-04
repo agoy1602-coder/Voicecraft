@@ -21,7 +21,7 @@ if (start < 0 || end < 0) {
   throw new Error('[VoiceCraft] Unsupported pocket-tts-js worker layout: fetchWithProgress block not found.');
 }
 
-const replacement = String.raw`// [VoiceCraft] resumable model downloader v2
+const replacement = `// [VoiceCraft] resumable model downloader v2
 // Large Pocket TTS ONNX files are downloaded from Hugging Face. A transient
 // connection failure must never discard an already completed portion of a
 // model. Download fixed byte ranges, retry each range independently, and only
