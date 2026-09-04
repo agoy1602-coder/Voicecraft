@@ -5,13 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "prebuild": "node scripts/patch-pocket-tts-download.cjs",
     "build": "vite build",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.cjs",
-    "lint": "tsc --noEmit",
-    "postinstall": "node scripts/patch-pocket-tts-download.cjs"
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -32,8 +30,8 @@
     "@vercel/node": "^5.3.24",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
-    "tailwindcss": "^4.1.14",
     "onnxruntime-web": "1.20.0",
+    "tailwindcss": "^4.1.14",
     "typescript": "~5.8.2",
     "tsx": "^4.21.0",
     "vite-plugin-pwa": "^1.3.0"
