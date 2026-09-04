@@ -15,15 +15,14 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 );
 
-// Warm Pocket TTS after the application has loaded while the network is
-// available. The service shares the same idempotent load promise used by
-// Create Clone, so this prepares the exact assets needed for airplane mode
-// without changing the clone path itself.
+// Pre-cache the Pocket TTS assets after the UI is mounted. This warm-up is
+// deliberately cache-only: it does not construct ONNX sessions or initialize
+// the heavy inference engine, so the main UI remains responsive.
 window.addEventListener('load', () => {
   window.setTimeout(() => {
     if (!navigator.onLine) return;
     pocketTtsService.warmup().catch((error) => {
-      console.warn('[VoiceCraft] Pocket TTS warmup deferred:', error);
+      console.warn('[VoiceCraft] Pocket TTS asset warmup deferred:', error);
     });
   }, 1000);
 });
