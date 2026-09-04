@@ -1,0 +1,27 @@
+const fs = require('fs');
+const path = require('path');
+
+const workerPath = path.join(process.cwd(), 'node_modules', 'pocket-tts-js', 'src', 'worker.js');
+
+if (!fs.existsSync(workerPath)) {
+  throw new Error(`Pocket TTS worker not found: ${workerPath}`);
+}
+
+let source = fs.readFileSync(workerPath, 'utf8');
+
+if (source.includes('[VoiceCraft] resumable model downloader')) {
+  process.exit(0);
+}
+
+const start = source.indexOf('async function fetchWithProgress(');
+const end = source.indexOf('\nasync function loadOrt(', start);
+
+if (start < 0 || end < 0) {
+  throw new Error('Unsupported pocket-tts-js worker layout: fetchWithProgress block not found.');
+}
+
+const replacement = `// [VoiceCraft] resumable model downloader\n// Large Pocket TTS ONNX files are fetched from Hugging Face. A transient\n// connection loss in the original downloader aborted the entire asset and\n// left Create Clone waiting forever. Download large assets in byte ranges so\n// only the failed range is retried. Completed assets are cached atomically.\nconst VC_RANGE_SIZE = 2 * 1024 * 1024;\nconst VC_MAX_ATTEMPTS = 5;\n\nfunction vcSleep(ms) {\n    return new Promise((resolve) => setTimeout(resolve, ms));\n}\n\nasync function vcFetch(url, options = {}, attempt = 1) {\n    try {\n        const response = await fetch(url, options);\n        if (!response.ok) throw new Error(\`HTTP \${response.status}\`);\n        return response;\n    } catch (error) {\n        if (attempt >= VC_MAX_ATTEMPTS) throw error;\n        await vcSleep(Math.min(8000, 500 * 2 ** (attempt - 1)));\n        return vcFetch(url, options, attempt + 1);\n    }\n}\n\nasync function vcReadRange(url, start, end, label, total, onProgress, completedBefore) {\n    let lastError = null;\n    for (let attempt = 1; attempt <= VC_MAX_ATTEMPTS; attempt++) {\n        try {\n            const res = await fetch(url, { headers: { Range: \`bytes=\${start}-\${end}\` } });\n            if (!(res.status === 206 || (start === 0 && res.status === 200))) {\n                throw new Error(\`Range request returned HTTP \${res.status}\`);\n            }\n            const buffer = new Uint8Array(await res.arrayBuffer());\n            const expected = end - start + 1;\n            if (buffer.byteLength !== expected && !(start === 0 && res.status === 200 && buffer.byteLength === total)) {\n                throw new Error(\`Incomplete range: received \${buffer.byteLength} of \${expected} bytes\`);\n            }\n            const loaded = completedBefore + buffer.byteLength;\n            onProgress?.({ label, loaded: Math.min(loaded, total), total, fromCache: false });\n            return buffer;\n        } catch (error) {\n            lastError = error;\n            if (attempt < VC_MAX_ATTEMPTS) {\n                onProgress?.({ label, loaded: completedBefore, total, fromCache: false });\n                await vcSleep(Math.min(8000, 500 * 2 ** (attempt - 1)));\n            }\n        }\n    }\n    throw new Error(\`Network error while downloading \${label} at byte \${start}-\${end}: \${lastError?.message || lastError}\`);\n}\n\nasync function fetchWithProgress(url, label, onProgress) {\n    const cache = await openCache();\n    if (cache) {\n        try {\n            const hit = await cache.match(url);\n            if (hit) return readBodyWithProgress(hit, label, onProgress, true);\n        } catch {\n            /* fall through to network */\n        }\n    }\n\n    // Discover the immutable file size first. Hugging Face supports byte-range\n    // requests for resolved model files; this lets mobile/weak connections\n    // recover without restarting a 20–100+ MB download.\n    let total = 0;\n    try {\n        const head = await vcFetch(url, { method: 'HEAD' });\n        total = Number(head.headers.get('content-length')) || 0;\n    } catch {\n        total = 0;\n    }\n\n    if (!total) {\n        const res = await vcFetch(url);\n        const forCache = cache ? res.clone() : null;\n        const bytes = await readBodyWithProgress(res, label, onProgress, false);\n        if (cache && forCache) {\n            try { await cache.put(url, forCache); } catch { /* best effort */ }\n        }\n        return bytes;\n    }\n\n    const parts = [];\n    let completed = 0;\n    for (let start = 0; start < total; start += VC_RANGE_SIZE) {\n        const end = Math.min(total - 1, start + VC_RANGE_SIZE - 1);\n        const part = await vcReadRange(url, start, end, label, total, onProgress, completed);\n        parts.push(part);\n        completed += part.byteLength;\n    }\n\n    const bytes = new Uint8Array(total);\n    let offset = 0;\n    for (const part of parts) {\n        bytes.set(part, offset);\n        offset += part.byteLength;\n    }\n\n    if (offset !== total) throw new Error(\`Network error: \${label} completed at \${offset}/\${total} bytes\`);\n\n    if (cache) {\n        try {\n            await cache.put(url, new Response(bytes, {\n                status: 200,\n                headers: {\n                    'Content-Type': 'application/octet-stream',\n                    'Content-Length': String(total),\n                },\n            }));\n        } catch {\n            /* quota exceeded or storage unavailable — inference can continue */\n        }\n    }\n    return bytes;\n}`;
+
+source = source.slice(0, start) + replacement + source.slice(end);
+fs.writeFileSync(workerPath, source);
+console.log('[VoiceCraft] patched pocket-tts-js with resumable model downloads');
