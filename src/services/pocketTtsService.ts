@@ -21,6 +21,19 @@ export interface PocketTTSLoadProgress {
 const ENGINE_LOAD_TIMEOUT_MS = 6 * 60 * 1000;
 const CLONE_TIMEOUT_MS = 5 * 60 * 1000;
 
+function traceClone(stage: string, detail?: string) {
+  const message = detail ? `[VoiceCloneTrace] ${stage} — ${detail}` : `[VoiceCloneTrace] ${stage}`;
+  console.info(message);
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem('voicecraft-clone-trace', JSON.stringify({ stage, detail: detail || '', at: Date.now() }));
+    } catch { /* diagnostics must never break cloning */ }
+    const button = document.getElementById('create-voice-clone-btn');
+    const label = button?.querySelector('span');
+    if (label) label.textContent = detail ? `${stage}: ${detail}` : stage;
+  }
+}
+
 class PocketTTSService {
   private tts: PocketTTS | null = null;
   private loadPromise: Promise<PocketTTS> | null = null;
@@ -28,15 +41,14 @@ class PocketTTSService {
   private clonedVoices = new Map<string, string>();
 
   constructor() {
-    // Start model initialization as soon as the browser imports this service.
-    // Create Clone can then reuse the same promise instead of appearing frozen on first use.
     if (typeof window !== 'undefined') {
-      void this.preload().catch(() => undefined);
+      void this.preload().catch((error) => traceClone('ENGINE_PRELOAD_ERROR', error instanceof Error ? error.message : String(error)));
     }
   }
 
   private emitProgress(progress: PocketTTSLoadProgress) {
     for (const listener of this.loadProgressListeners) listener(progress);
+    if (progress.label) traceClone('POCKET_PROGRESS', progress.label);
   }
 
   private withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -62,7 +74,7 @@ class PocketTTSService {
     }
 
     this.loadPromise = (async () => {
-      this.emitProgress({ label: 'Starting Pocket TTS engine…' });
+      traceClone('ENGINE_INIT_ENTER');
       const engine = new PocketTTS({
         language: 'english_2026-04',
         quantized: true,
@@ -76,6 +88,7 @@ class PocketTTSService {
         ENGINE_LOAD_TIMEOUT_MS,
         'Pocket TTS model loading timed out after 6 minutes. The voice-cloning model could not finish initializing on this device.',
       );
+      traceClone('ENGINE_INIT_RETURN');
       this.emitProgress({ label: 'Pocket TTS engine ready.' });
       this.tts = engine;
       return engine;
@@ -101,24 +114,33 @@ class PocketTTSService {
     voiceKey: string,
     onProgress?: (progress: PocketTTSLoadProgress) => void,
   ): Promise<PocketTTSCloneResult> {
+    traceClone('CLONE_ENTER', `key=${voiceKey}`);
     const engine = await this.getEngine(onProgress);
+    traceClone('DECODE_ENTER');
     const buffer = await sampleBlob.arrayBuffer();
     const audioContext = new AudioContext();
     try {
       onProgress?.({ label: 'Decoding vocal sample…' });
       const decoded = await audioContext.decodeAudioData(buffer);
       const mono = decoded.getChannelData(0);
+      traceClone('DECODE_RETURN', `${decoded.duration.toFixed(2)}s ${decoded.sampleRate}Hz ${mono.length} samples`);
       onProgress?.({ label: 'Extracting voice characteristics with neural encoder…' });
 
+      traceClone('ENGINE_CLONE_ENTER', `${mono.length} samples @ ${decoded.sampleRate}Hz`);
       const voiceId = await this.withTimeout(
         engine.cloneVoice(mono, { inputSampleRate: decoded.sampleRate, name: voiceKey }),
         CLONE_TIMEOUT_MS,
         'Voice cloning timed out after 5 minutes. The neural voice encoder did not finish on this device.',
       );
+      traceClone('ENGINE_CLONE_RETURN', voiceId);
 
       this.clonedVoices.set(voiceKey, voiceId);
       onProgress?.({ label: 'Voice clone created successfully.' });
+      traceClone('CLONE_RETURN', voiceId);
       return { voiceId, sampleRate: engine.sampleRate };
+    } catch (error) {
+      traceClone('CLONE_ERROR', error instanceof Error ? error.message : String(error));
+      throw error;
     } finally {
       await audioContext.close();
     }
