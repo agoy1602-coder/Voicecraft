@@ -29,7 +29,7 @@ const VC_MAX_ATTEMPTS = 6;
 const VC_FETCH_TIMEOUT_MS = 30000;
 const VC_RANGE_CACHE_PREFIX = '/__voicecraft_pocket_range_cache__';
 
-function vcSleep(ms) {
+function vcPocketSleepV3(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -50,7 +50,7 @@ async function vcRequest(url, options = {}, attempt = 1) {
         return response;
     } catch (error) {
         if (attempt >= VC_MAX_ATTEMPTS) throw error;
-        await vcSleep(Math.min(10000, 500 * 2 ** (attempt - 1)));
+        await vcPocketSleepV3(Math.min(10000, 500 * 2 ** (attempt - 1)));
         return vcRequest(url, options, attempt + 1);
     }
 }
@@ -135,7 +135,7 @@ async function vcReadRange(url, start, end, label, total, onProgress, completedB
             lastError = error;
             if (attempt < VC_MAX_ATTEMPTS) {
                 onProgress?.({ label, loaded: completedBefore, total, fromCache: false });
-                await vcSleep(Math.min(10000, 500 * 2 ** (attempt - 1)));
+                await vcPocketSleepV3(Math.min(10000, 500 * 2 ** (attempt - 1)));
             }
         }
     }
