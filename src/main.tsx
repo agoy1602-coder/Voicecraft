@@ -14,42 +14,33 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 );
 
-// Cache-only Pocket TTS preparation. Do not initialize the heavy ONNX
-// inference engine during application startup because that can monopolize
-// the UI thread on mobile devices. The actual engine remains lazy and is
-// initialized by Create Clone when needed.
-const POCKET_TTS_CACHE = 'voicecraft-pocket-tts-v1';
-const POCKET_TTS_BASE = 'https://huggingface.co/vlapky/pocket-tts-onnx/resolve/main/onnx/english_2026-04';
-const POCKET_TTS_ASSETS = [
-  'bundle.json',
-  'tokenizer.model',
-  'mimi_encoder_int8.onnx',
-  'text_conditioner_int8.onnx',
-  'flow_lm_main_int8.onnx',
-  'flow_lm_flow_int8.onnx',
-  'mimi_decoder_int8.onnx',
-  'bos_before_voice.npy',
-];
-
+// Prepare Pocket TTS model assets outside the UI thread. The worker only
+// downloads/caches the eight model resources; it never constructs ORT
+// sessions or initializes the inference engine. Create Clone remains lazy.
 window.addEventListener('load', () => {
-  window.setTimeout(async () => {
+  window.setTimeout(() => {
     if (!navigator.onLine) return;
 
-    try {
-      const cache = await caches.open(POCKET_TTS_CACHE);
+    const worker = new Worker(
+      new URL('./services/pocketTtsPreload.worker.ts', import.meta.url),
+      { type: 'module' },
+    );
 
-      for (const asset of POCKET_TTS_ASSETS) {
-        const url = `${POCKET_TTS_BASE}/${asset}`;
-        if (await cache.match(url)) continue;
-
-        const response = await fetch(url, { cache: 'no-store' });
-        if (!response.ok) throw new Error(`Pocket TTS asset ${asset}: HTTP ${response.status}`);
-        await cache.put(url, response.clone());
+    worker.onmessage = (event) => {
+      if (event.data?.type === 'ready') {
+        console.log('[VoiceCraft] Pocket TTS assets cached for offline use.');
+        worker.terminate();
+      } else if (event.data?.type === 'error' || event.data?.type === 'skipped') {
+        console.warn('[VoiceCraft] Pocket TTS asset warmup deferred:', event.data?.message || event.data?.reason);
+        worker.terminate();
       }
+    };
 
-      console.log('[VoiceCraft] Pocket TTS assets cached for offline use.');
-    } catch (error) {
-      console.warn('[VoiceCraft] Pocket TTS asset warmup deferred:', error);
-    }
+    worker.onerror = (event) => {
+      console.warn('[VoiceCraft] Pocket TTS preload worker failed:', event.message);
+      worker.terminate();
+    };
+
+    worker.postMessage({ type: 'warmup' });
   }, 1000);
 });
