@@ -65,6 +65,16 @@ class PocketTTSService {
     }
   }
 
+  /**
+   * Warm the local Pocket TTS engine without requiring a clone action.
+   * This is intentionally idempotent and shares the same load promise used
+   * by cloneVoice(), so a user who clicks Clone while warming up will await
+   * the same initialization rather than starting a second model load.
+   */
+  async warmup(onProgress?: (progress: PocketTTSLoadProgress) => void): Promise<void> {
+    await this.getEngine(onProgress);
+  }
+
   async cloneVoice(
     sampleBlob: Blob,
     voiceKey: string,
