@@ -41,6 +41,10 @@ class PocketTTSService {
         language: 'english_2026-04',
         quantized: true,
         voiceCloning: true,
+        // Use VoiceCraft's bundled ORT runtime. This removes the hidden CDN
+        // dependency from the browser clone path and preserves airplane-mode
+        // operation once the model assets are cached.
+        ortBaseUrl: '/ort/',
         cache: true,
       });
 
