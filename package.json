@@ -22,7 +22,8 @@
     "express": "^4.21.2",
     "dotenv": "^17.2.3",
     "motion": "^12.23.24",
-    "pocket-tts-js": "0.1.0"
+    "pocket-tts-js": "0.1.0",
+    "onnxruntime-web": "1.20.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
