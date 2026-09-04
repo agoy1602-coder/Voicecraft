@@ -18,6 +18,20 @@ export interface PocketTTSLoadProgress {
   fromCache?: boolean;
 }
 
+const POCKET_TTS_CACHE = 'voicecraft-pocket-tts-v1';
+const POCKET_TTS_MODEL_BASE =
+  'https://huggingface.co/vlapky/pocket-tts-onnx/resolve/main/onnx/english_2026-04';
+const POCKET_TTS_ASSETS = [
+  'bundle.json',
+  'tokenizer.model',
+  'mimi_encoder_int8.onnx',
+  'text_conditioner_int8.onnx',
+  'flow_lm_main_int8.onnx',
+  'flow_lm_flow_int8.onnx',
+  'mimi_decoder_int8.onnx',
+  'bos_before_voice.npy',
+] as const;
+
 class PocketTTSService {
   private tts: PocketTTS | null = null;
   private loadPromise: Promise<PocketTTS> | null = null;
@@ -66,13 +80,49 @@ class PocketTTSService {
   }
 
   /**
-   * Warm the local Pocket TTS engine without requiring a clone action.
-   * This is intentionally idempotent and shares the same load promise used
-   * by cloneVoice(), so a user who clicks Clone while warming up will await
-   * the same initialization rather than starting a second model load.
+   * Pre-fetch the exact Pocket TTS model assets into Cache Storage without
+   * constructing ONNX sessions. This keeps the application responsive while
+   * online and leaves the expensive runtime initialization for Clone/Generate.
    */
   async warmup(onProgress?: (progress: PocketTTSLoadProgress) => void): Promise<void> {
-    await this.getEngine(onProgress);
+    if (!('caches' in window) || !navigator.onLine) return;
+
+    const cache = await caches.open(POCKET_TTS_CACHE);
+    let completed = 0;
+
+    for (const asset of POCKET_TTS_ASSETS) {
+      const url = `${POCKET_TTS_MODEL_BASE}/${asset}`;
+      const existing = await cache.match(url);
+
+      if (existing) {
+        completed += 1;
+        onProgress?.({
+          label: `Preparing offline voice model… ${completed}/${POCKET_TTS_ASSETS.length}`,
+          fromCache: true,
+          loaded: completed,
+          total: POCKET_TTS_ASSETS.length,
+        });
+        continue;
+      }
+
+      const response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`Pocket TTS asset ${asset} returned HTTP ${response.status}`);
+
+      await cache.put(url, response.clone());
+      completed += 1;
+      onProgress?.({
+        label: `Preparing offline voice model… ${completed}/${POCKET_TTS_ASSETS.length}`,
+        fromCache: false,
+        loaded: completed,
+        total: POCKET_TTS_ASSETS.length,
+      });
+    }
+
+    onProgress?.({
+      label: 'Offline voice model ready.',
+      loaded: completed,
+      total: POCKET_TTS_ASSETS.length,
+    });
   }
 
   async cloneVoice(
