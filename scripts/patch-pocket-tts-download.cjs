@@ -9,7 +9,7 @@ if (!fs.existsSync(workerPath)) {
 
 let source = fs.readFileSync(workerPath, 'utf8');
 
-const marker = '// [VoiceCraft] resumable model downloader v2';
+const marker = '// [VoiceCraft] resumable model downloader v3';
 const markerStart = source.indexOf(marker);
 const start = markerStart >= 0 ? markerStart : source.indexOf('async function fetchWithProgress(');
 const end = source.indexOf('\nasync function loadOrt(', start);
@@ -18,21 +18,34 @@ if (start < 0 || end < 0) {
   throw new Error('[VoiceCraft] Unsupported pocket-tts-js worker layout: fetchWithProgress block not found.');
 }
 
-const replacement = `// [VoiceCraft] resumable model downloader v2
-// Large Pocket TTS ONNX files are downloaded from Hugging Face. A transient
-// connection failure must never discard an already completed portion of a
-// model. Download fixed byte ranges, retry each range independently, and only
-// place the complete asset into Cache Storage after every byte is present.
+const replacement = `// [VoiceCraft] resumable model downloader v3
+// Persist each completed byte range so a refresh/network interruption resumes
+// instead of restarting a 100+ MB Pocket TTS bundle from byte zero. Every
+// network operation has a finite timeout, so a stalled connection cannot leave
+// Create Clone waiting forever. The complete asset is still stored under the
+// normal Pocket TTS cache key once every range is present.
 const VC_RANGE_SIZE = 2 * 1024 * 1024;
 const VC_MAX_ATTEMPTS = 6;
+const VC_FETCH_TIMEOUT_MS = 30000;
+const VC_RANGE_CACHE_PREFIX = '/__voicecraft_pocket_range_cache__';
 
 function vcSleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function vcFetch(url, options = {}, timeoutMs = VC_FETCH_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 async function vcRequest(url, options = {}, attempt = 1) {
     try {
-        const response = await fetch(url, options);
+        const response = await vcFetch(url, options);
         if (!response.ok) throw new Error(\`HTTP \${response.status}\`);
         return response;
     } catch (error) {
@@ -42,12 +55,42 @@ async function vcRequest(url, options = {}, attempt = 1) {
     }
 }
 
-async function vcReadRange(url, start, end, label, total, onProgress, completedBefore) {
-    let lastError = null;
+function vcRangeKey(url, start, end) {
+    const encoded = encodeURIComponent(url);
+    return new Request(\`\${self.location.origin}\${VC_RANGE_CACHE_PREFIX}?url=\${encoded}&start=\${start}&end=\${end}\`);
+}
 
+async function vcReadCachedRange(cache, url, start, end, label, total, onProgress, completedBefore) {
+    if (!cache) return null;
+    try {
+        const hit = await cache.match(vcRangeKey(url, start, end));
+        if (!hit) return null;
+        const buffer = new Uint8Array(await hit.arrayBuffer());
+        const expected = end - start + 1;
+        if (buffer.byteLength !== expected) {
+            await cache.delete(vcRangeKey(url, start, end));
+            return null;
+        }
+        onProgress?.({
+            label,
+            loaded: Math.min(completedBefore + buffer.byteLength, total),
+            total,
+            fromCache: true,
+        });
+        return buffer;
+    } catch {
+        return null;
+    }
+}
+
+async function vcReadRange(url, start, end, label, total, onProgress, completedBefore, cache) {
+    const cached = await vcReadCachedRange(cache, url, start, end, label, total, onProgress, completedBefore);
+    if (cached) return { buffer: cached, wholeFile: false };
+
+    let lastError = null;
     for (let attempt = 1; attempt <= VC_MAX_ATTEMPTS; attempt++) {
         try {
-            const response = await fetch(url, {
+            const response = await vcFetch(url, {
                 headers: { Range: \`bytes=\${start}-\${end}\` },
                 cache: 'no-store',
             });
@@ -67,6 +110,20 @@ async function vcReadRange(url, start, end, label, total, onProgress, completedB
                 throw new Error(\`Incomplete range: received \${buffer.byteLength} of \${expected} bytes\`);
             }
 
+            if (!isWholeFileFallback && cache) {
+                try {
+                    await cache.put(vcRangeKey(url, start, end), new Response(buffer, {
+                        status: 200,
+                        headers: {
+                            'Content-Type': 'application/octet-stream',
+                            'Content-Length': String(buffer.byteLength),
+                        },
+                    }));
+                } catch {
+                    // Persistence is best-effort; the current session can continue.
+                }
+            }
+
             onProgress?.({
                 label,
                 loaded: Math.min(completedBefore + buffer.byteLength, total),
@@ -84,6 +141,19 @@ async function vcReadRange(url, start, end, label, total, onProgress, completedB
     }
 
     throw new Error(\`Network error while downloading \${label} at byte \${start}-\${end}: \${lastError?.message || lastError}\`);
+}
+
+async function vcDeleteRangeCache(cache, url) {
+    if (!cache) return;
+    try {
+        const keys = await cache.keys();
+        const prefix = \`\${self.location.origin}\${VC_RANGE_CACHE_PREFIX}?url=\${encodeURIComponent(url)}&\`;
+        await Promise.all(keys
+            .filter((request) => request.url.startsWith(prefix))
+            .map((request) => cache.delete(request)));
+    } catch {
+        // Cleanup is best-effort.
+    }
 }
 
 async function fetchWithProgress(url, label, onProgress) {
@@ -106,7 +176,6 @@ async function fetchWithProgress(url, label, onProgress) {
         total = 0;
     }
 
-    // If the server does not expose a length, retain the normal retried fetch.
     if (!total) {
         const response = await vcRequest(url, { cache: 'no-store' });
         const forCache = cache ? response.clone() : null;
@@ -122,11 +191,14 @@ async function fetchWithProgress(url, label, onProgress) {
 
     for (let start = 0; start < total; start += VC_RANGE_SIZE) {
         const end = Math.min(total - 1, start + VC_RANGE_SIZE - 1);
-        const result = await vcReadRange(url, start, end, label, total, onProgress, completed);
+        const result = await vcReadRange(url, start, end, label, total, onProgress, completed, cache);
 
-        // Some servers may legally ignore Range for the first request. In that
-        // case the complete response is already the desired asset.
-        if (result.wholeFile) return result.buffer;
+        if (result.wholeFile) {
+            if (cache) {
+                try { await cache.put(url, new Response(result.buffer, { status: 200 })); } catch { /* best effort */ }
+            }
+            return result.buffer;
+        }
 
         parts.push(result.buffer);
         completed += result.buffer.byteLength;
@@ -160,6 +232,7 @@ async function fetchWithProgress(url, label, onProgress) {
             // Storage failure must not prevent this completed model from being
             // used for the current session.
         }
+        await vcDeleteRangeCache(cache, url);
     }
 
     return bytes;
@@ -167,4 +240,4 @@ async function fetchWithProgress(url, label, onProgress) {
 
 source = source.slice(0, start) + replacement + source.slice(end);
 fs.writeFileSync(workerPath, source);
-console.log('[VoiceCraft] installed Pocket TTS resumable model downloader v2');
+console.log('[VoiceCraft] installed Pocket TTS resumable model downloader v3');
