@@ -9,12 +9,9 @@ if (!fs.existsSync(workerPath)) {
 
 let source = fs.readFileSync(workerPath, 'utf8');
 
-if (source.includes('[VoiceCraft] resumable model downloader v2')) {
-  console.log('[VoiceCraft] Pocket TTS resumable downloader already installed');
-  process.exit(0);
-}
-
-const start = source.indexOf('async function fetchWithProgress(');
+const marker = '// [VoiceCraft] resumable model downloader v2';
+const markerStart = source.indexOf(marker);
+const start = markerStart >= 0 ? markerStart : source.indexOf('async function fetchWithProgress(');
 const end = source.indexOf('\nasync function loadOrt(', start);
 
 if (start < 0 || end < 0) {
