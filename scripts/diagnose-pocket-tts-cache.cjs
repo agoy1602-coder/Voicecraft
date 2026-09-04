@@ -1,0 +1,11 @@
+const fs = require('fs');
+const path = require('path');
+const workerPath = path.join(process.cwd(), 'node_modules', 'pocket-tts-js', 'src', 'worker.js');
+if (!fs.existsSync(workerPath)) throw new Error(`[VoiceCraft] Pocket TTS worker not found: ${workerPath}`);
+const source = fs.readFileSync(workerPath, 'utf8');
+const markers = ['openCache()', 'cache.match(url)', 'cache.put(url', 'cache.put(__vcPocketV4RangeKey', 'modelBaseUrl', 'ortBaseUrl', 'voiceEncoder'];
+console.log('[VoiceCraft] Pocket TTS cache diagnostic');
+for (const marker of markers) console.log(`${marker}: ${source.includes(marker) ? 'FOUND' : 'NOT_FOUND'}`);
+const match = source.match(/function openCache[\s\S]{0,800}/);
+if (match) console.log('[VoiceCraft] openCache excerpt:\n' + match[0]);
+console.log('[VoiceCraft] worker bytes:', Buffer.byteLength(source, 'utf8'));
