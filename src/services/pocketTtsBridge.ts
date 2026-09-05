@@ -1,7 +1,6 @@
 import { PocketTTS, chunksToWavBlob } from 'pocket-tts-js';
 import type { ClonedVoiceProfile, AudioClip, AudioSentence } from '../types';
 import type { TTSGenerateOptions, TTSResult } from './ttsService';
-import { voiceCloneService } from './voiceCloneService';
 import { ttsService } from './ttsService';
 
 let engine: PocketTTS | null = null;
@@ -19,8 +18,6 @@ async function getEngine(): Promise<PocketTTS> {
       cache: true,
       cacheName: 'voicecraft-pocket-tts-v1',
       maxThreads: 4,
-      // Keep the ONNX Runtime JavaScript/WASM runtime on the same origin as
-      // VoiceCraft so cloned-voice inference does not depend on a CDN offline.
       ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
     });
     await instance.load();
@@ -51,43 +48,6 @@ async function base64ToBlob(base64: string, mimeType = 'audio/webm'): Promise<Bl
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return new Blob([bytes], { type: mimeType });
-}
-
-function makeProfile(name: string, voiceRef: string, sampleDuration: number, notes: string, sampleBase64: string, mimeType: string): ClonedVoiceProfile {
-  return {
-    id: `clone_pocket_${Date.now()}`,
-    name,
-    type: 'cloned',
-    gender: 'neutral',
-    tone: 'professional',
-    baseVoice: 'Zephyr',
-    description: `Private browser-local neural voice clone for ${name}.`,
-    avatarColor: 'from-cyan-500 to-blue-700',
-    pitchShift: 0,
-    speedFactor: 1,
-    warmth: 0.8,
-    breathiness: 0.1,
-    basePitchHz: 160,
-    timbreDescription: 'Pocket TTS zero-shot voice conditioning from the supplied reference recording.',
-    promptModifier: `Speak naturally using the cloned voice identity for ${name}.`,
-    sampleDuration,
-    notes,
-    createdAt: Date.now(),
-    provider: 'pocket-tts',
-    providerVoiceId: voiceRef,
-    providerSampleBase64: sampleBase64,
-    providerSampleMimeType: mimeType,
-  };
-}
-
-async function cloneLocally(name: string, blob: Blob, notes: string): Promise<ClonedVoiceProfile> {
-  const tts = await getEngine();
-  const decoded = await decodeReference(blob);
-  const voiceRef = await tts.cloneVoice(decoded.audio, { inputSampleRate: decoded.sampleRate, name });
-  const sampleBase64 = await blobToBase64(blob);
-  const profile = makeProfile(name, voiceRef, Number(decoded.duration.toFixed(2)), notes, sampleBase64, blob.type || 'audio/webm');
-  activeVoiceRefs.set(profile.id, voiceRef);
-  return profile;
 }
 
 async function ensureVoiceRef(voice: ClonedVoiceProfile): Promise<string> {
@@ -182,21 +142,15 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
 }
 
 export function installPocketTtsBridge(): void {
-  const cloneService = voiceCloneService as any;
-  cloneService.analyzeAndClone = async function(name: string, sampleBlob?: Blob, _sampleBase64?: string, notes = '') {
-    if (!sampleBlob) throw new Error('A local audio sample is required for browser voice cloning.');
-    try {
-      return await cloneLocally(name, sampleBlob, notes);
-    } catch (error) {
-      console.error('[VoiceCraft] Pocket TTS voice cloning failed:', error);
-      throw new Error('Browser voice cloning could not initialize on this device. No fake clone profile was created. Please try again with a shorter, clean recording or a more capable browser/device.');
-    }
-  };
-
+  // IMPORTANT: Create Clone must only persist the reference sample. Do not
+  // initialize Pocket TTS here. The inference engine is intentionally lazy and
+  // starts only when the user actually synthesizes speech.
   const tts = ttsService as any;
   const originalGenerate = tts.generateSpeech.bind(tts);
   tts.generateSpeech = async function(options: TTSGenerateOptions) {
-    if (options.voice?.type === 'cloned' && (options.voice as ClonedVoiceProfile).provider === 'pocket-tts') return generateLocally(options);
+    if (options.voice?.type === 'cloned' && (options.voice as ClonedVoiceProfile).provider === 'pocket-tts') {
+      return generateLocally(options);
+    }
     return originalGenerate(options);
   };
 }

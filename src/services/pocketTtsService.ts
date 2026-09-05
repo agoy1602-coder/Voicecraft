@@ -18,6 +18,8 @@ export interface PocketTTSLoadProgress {
   fromCache?: boolean;
 }
 
+const POCKET_TTS_CACHE_NAME = 'voicecraft-pocket-tts-v1';
+
 class PocketTTSService {
   private tts: PocketTTS | null = null;
   private loadPromise: Promise<PocketTTS> | null = null;
@@ -42,6 +44,11 @@ class PocketTTSService {
         quantized: true,
         voiceCloning: true,
         cache: true,
+        cacheName: POCKET_TTS_CACHE_NAME,
+        maxThreads: 4,
+        // Keep ONNX Runtime on the same origin so synthesis does not depend on
+        // jsDelivr when the app is offline.
+        ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
       });
 
       await engine.load((progress: PocketTTSLoadProgress) => {
