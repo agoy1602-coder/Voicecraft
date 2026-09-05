@@ -61,6 +61,7 @@ export default defineConfig(() => {
           navigateFallback: `${appPath}/index.html`,
           globPatterns: ['**/*.{js,css,html,mjs,wasm,svg,ico,png,webp}'],
           maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
+          mode: 'development',
         },
       }),
     ],
