@@ -3,6 +3,7 @@ import type { ClonedVoiceProfile, AudioClip, AudioSentence } from '../types';
 import type { TTSGenerateOptions, TTSResult } from './ttsService';
 import { voiceCloneService } from './voiceCloneService';
 import { ttsService } from './ttsService';
+import { persistPocketTtsDiagnostic } from './pocketTtsPersistentDiagnostic';
 
 let engine: PocketTTS | null = null;
 let enginePromise: Promise<PocketTTS> | null = null;
@@ -32,8 +33,10 @@ function diagnosticPatch(patch: Partial<DiagnosticState>) {
     deviceMemory: (navigator as any).deviceMemory,
     loadProgress: [],
   };
-  target.__VC_POCKET_DIAGNOSTIC__ = { ...previous, ...patch };
-  console.log('[VC-DIAG]', target.__VC_POCKET_DIAGNOSTIC__);
+  const next = { ...previous, ...patch };
+  target.__VC_POCKET_DIAGNOSTIC__ = next;
+  persistPocketTtsDiagnostic(next);
+  console.log('[VC-DIAG]', next);
 }
 
 function serializeError(error: unknown): Record<string, unknown> {
