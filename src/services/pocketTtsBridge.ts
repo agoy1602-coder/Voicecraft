@@ -95,7 +95,9 @@ async function getEngine(): Promise<PocketTTS> {
       voiceCloning: true,
       cache: true,
       cacheName: 'voicecraft-pocket-tts-v1',
-      maxThreads: 4,
+      // Isolated experiment: single-threaded WASM. The trace shows the stall
+      // after flow_lm_main bytes are cached, during ONNX session initialization.
+      maxThreads: 1,
       ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
     });
 
