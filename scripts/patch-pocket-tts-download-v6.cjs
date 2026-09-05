@@ -76,7 +76,7 @@ async function fetchWithProgress(url, label, onProgress) {
     }
 
     const response = await fetch(url, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) throw new Error('HTTP ' + response.status);
     const bytes = await readBodyWithProgress(response, label, onProgress, false);
 
     const persisted = await __vcPocketV6Put(url, bytes);
