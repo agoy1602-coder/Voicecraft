@@ -7,6 +7,10 @@ let engine: PocketTTS | null = null;
 let enginePromise: Promise<PocketTTS> | null = null;
 const activeVoiceRefs = new Map<string, string>();
 
+function getLocalOrtBaseUrl(): string {
+  return new URL(`${import.meta.env.BASE_URL}ort/`, window.location.origin).href;
+}
+
 async function getEngine(): Promise<PocketTTS> {
   if (engine) return engine;
   if (enginePromise) return enginePromise;
@@ -18,7 +22,11 @@ async function getEngine(): Promise<PocketTTS> {
       cache: true,
       cacheName: 'voicecraft-pocket-tts-v1',
       maxThreads: 4,
-      ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
+      // Pass an absolute same-origin URL. The Pocket TTS worker dynamically
+      // imports ort.min.mjs and then resolves its WASM modules from this base.
+      // Using an absolute URL prevents the worker from falling back to its
+      // bundled /assets/ path or the public CDN runtime.
+      ortBaseUrl: getLocalOrtBaseUrl(),
     });
     await instance.load();
     engine = instance;
