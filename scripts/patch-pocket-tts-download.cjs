@@ -137,5 +137,113 @@ async function fetchWithProgress(url, label, onProgress) {
 }`;
 
 source = source.slice(0, start) + replacement + source.slice(end);
+
+// v5 fix: a large whole-file Cache.put() can fail on Android even after the
+// complete response was downloaded. v4 then deleted its successful 2 MiB
+// range entries, leaving the asset unavailable after an offline refresh.
+// Keep those ranges and reconstruct the file from them on the next load.
+const rangeRestore = `
+async function __vcPocketV5ReadCompleteFromRanges(cache, url, label, onProgress) {
+    if (!cache) return null;
+    try {
+        const prefix = \`\${self.location.origin}\${__VC_POCKET_V4_RANGE_CACHE_PREFIX}?url=\${encodeURIComponent(url)}&\`;
+        const keys = await cache.keys();
+        const ranges = keys.map((request) => {
+            if (!request.url.startsWith(prefix)) return null;
+            const parsed = new URL(request.url);
+            const start = Number(parsed.searchParams.get('start'));
+            const end = Number(parsed.searchParams.get('end'));
+            if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start) return null;
+            return { request, start, end };
+        }).filter(Boolean).sort((a, b) => a.start - b.start);
+        if (!ranges.length || ranges[0].start !== 0) return null;
+        let next = 0;
+        let total = 0;
+        const parts = [];
+        for (const range of ranges) {
+            if (range.start !== next) return null;
+            const response = await cache.match(range.request);
+            if (!response) return null;
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            if (bytes.byteLength !== range.end - range.start + 1) return null;
+            parts.push(bytes);
+            next = range.end + 1;
+            total += bytes.byteLength;
+        }
+        if (!total) return null;
+        const assembled = new Uint8Array(total);
+        let offset = 0;
+        for (const part of parts) { assembled.set(part, offset); offset += part.byteLength; }
+        onProgress?.({ label, loaded: total, total, fromCache: true });
+        return assembled;
+    } catch { return null; }
+}
+
+async function __vcPocketV5PersistWholeFile(cache, url, bytes) {
+    if (!cache) return false;
+    try {
+        await cache.put(url, new Response(bytes, {
+            status: 200,
+            headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(bytes.byteLength) }
+        }));
+        return true;
+    } catch (error) {
+        console.warn('[VoiceCraft] Pocket TTS whole-file cache failed; retaining range cache:', url, error);
+        return false;
+    }
+}
+`;
+
+const fetchStart = source.indexOf('async function fetchWithProgress(');
+const fetchEnd = source.indexOf('\nasync function loadOrt(', fetchStart);
+if (fetchStart < 0 || fetchEnd < 0) throw new Error('[VoiceCraft] v5 fetchWithProgress patch target not found.');
+
+const v5Fetch = `async function fetchWithProgress(url, label, onProgress) {
+    const cache = await openCache();
+    if (cache) {
+        try {
+            const hit = await cache.match(url);
+            if (hit) return readBodyWithProgress(hit, label, onProgress, true);
+        } catch {}
+        const ranged = await __vcPocketV5ReadCompleteFromRanges(cache, url, label, onProgress);
+        if (ranged) return ranged;
+    }
+    let total = 0;
+    try {
+        const head = await __vcPocketV4Request(url, { method: 'HEAD', cache: 'no-store' });
+        total = Number(head.headers.get('content-length')) || 0;
+    } catch {}
+    if (!total) {
+        const response = await __vcPocketV4Request(url, { cache: 'no-store' });
+        const bytes = await readBodyWithProgress(response, label, onProgress, false);
+        await __vcPocketV5PersistWholeFile(cache, url, bytes);
+        return bytes;
+    }
+    const parts = [];
+    let completed = 0;
+    for (let start = 0; start < total; start += __VC_POCKET_V4_RANGE_SIZE) {
+        const end = Math.min(total - 1, start + __VC_POCKET_V4_RANGE_SIZE - 1);
+        const result = await __vcPocketV4ReadRange(url, start, end, label, total, onProgress, completed, cache);
+        if (result.wholeFile) {
+            await __vcPocketV5PersistWholeFile(cache, url, result.buffer);
+            return result.buffer;
+        }
+        parts.push(result.buffer);
+        completed += result.buffer.byteLength;
+    }
+    if (completed !== total) throw new Error(\`Network error: \${label} completed at \${completed}/\${total} bytes\`);
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
+    if (offset !== total) throw new Error(\`Network error: \${label} assembled at \${offset}/\${total} bytes\`);
+    const persisted = await __vcPocketV5PersistWholeFile(cache, url, bytes);
+    if (persisted) await __vcPocketV4DeleteRangeCache(cache, url);
+    // When persisted=false the range cache is deliberately retained for offline reload.
+    return bytes;
+}`;
+
+source = source.slice(0, fetchStart) + rangeRestore + '\n' + v5Fetch + source.slice(fetchEnd);
+source = source.replace('// [VoiceCraft] resumable model downloader v4', '// [VoiceCraft] resumable model downloader v5');
+
 fs.writeFileSync(workerPath, source);
-console.log('[VoiceCraft] installed Pocket TTS resumable model downloader v4');
+console.log('[VoiceCraft] installed Pocket TTS resumable model downloader v5');
