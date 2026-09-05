@@ -61,6 +61,35 @@ export default defineConfig(() => {
           navigateFallback: `${appPath}/index.html`,
           globPatterns: ['**/*.{js,css,html,mjs,wasm,svg,ico,png,webp}'],
           maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
+          runtimeCaching: [
+            {
+              urlPattern: /\/assets\/worker-[^/]+\.js$/,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'voicecraft-pocket-workers-v1',
+                cacheableResponse: { statuses: [0, 200] },
+                expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              },
+            },
+            {
+              urlPattern: /\/assets\/.+\.(?:js|mjs)$/,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'voicecraft-offline-js-v1',
+                cacheableResponse: { statuses: [0, 200] },
+                expiration: { maxEntries: 150, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              },
+            },
+            {
+              urlPattern: /\/ort\/.+\.(?:mjs|wasm)$/,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'voicecraft-offline-ort-v1',
+                cacheableResponse: { statuses: [0, 200] },
+                expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              },
+            },
+          ],
         },
       }),
     ],
