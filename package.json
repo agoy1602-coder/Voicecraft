@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "node scripts/normalize-pocket-tts-worker.cjs && node scripts/patch-pocket-tts-download-v6.cjs && node scripts/normalize-pocket-tts-worker.cjs && vite build",
+    "build": "node scripts/normalize-pocket-tts-worker.cjs && (grep -q \"offline persistence downloader v6\" node_modules/pocket-tts-js/src/worker.js || node scripts/patch-pocket-tts-download-v6.cjs) && vite build",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.cjs",
