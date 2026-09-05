@@ -2,10 +2,18 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import {registerSW} from 'virtual:pwa-register';
 import { installPocketTtsBridge } from './services/pocketTtsBridge';
+import { readPocketTtsDiagnostic } from './services/pocketTtsPersistentDiagnostic';
 import App from './App.tsx';
 import './index.css';
 
 registerSW({immediate: true});
+
+const previousPocketTtsDiagnostic = readPocketTtsDiagnostic();
+if (previousPocketTtsDiagnostic) {
+  (globalThis as any).__VC_PREVIOUS_POCKET_DIAGNOSTIC__ = previousPocketTtsDiagnostic;
+  console.log('[VC-DIAG] Previous persisted Pocket TTS state:', previousPocketTtsDiagnostic);
+}
+
 installPocketTtsBridge();
 
 createRoot(document.getElementById('root')!).render(
