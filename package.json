@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "node scripts/normalize-pocket-tts-worker.cjs && node scripts/patch-pocket-tts-download.cjs && node scripts/normalize-pocket-tts-worker.cjs && node scripts/diagnose-pocket-tts-cache.cjs && vite build",
+    "build": "node scripts/normalize-pocket-tts-worker.cjs && node scripts/patch-pocket-tts-download.cjs && node scripts/normalize-pocket-tts-worker.cjs && node scripts/trace-pocket-tts-sessions.cjs && node scripts/patch-pocket-tts-diagnostic.cjs && node scripts/diagnose-pocket-tts-cache.cjs && vite build",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.cjs",

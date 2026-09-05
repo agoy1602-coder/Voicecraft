@@ -3,6 +3,7 @@ import type { ClonedVoiceProfile, AudioClip, AudioSentence } from '../types';
 import type { TTSGenerateOptions, TTSResult } from './ttsService';
 import { voiceCloneService } from './voiceCloneService';
 import { ttsService } from './ttsService';
+import { persistPocketTtsDiagnostic } from './pocketTtsPersistentDiagnostic';
 
 let engine: PocketTTS | null = null;
 let enginePromise: Promise<PocketTTS> | null = null;
@@ -32,8 +33,10 @@ function diagnosticPatch(patch: Partial<DiagnosticState>) {
     deviceMemory: (navigator as any).deviceMemory,
     loadProgress: [],
   };
-  target.__VC_POCKET_DIAGNOSTIC__ = { ...previous, ...patch };
-  console.log('[VC-DIAG]', target.__VC_POCKET_DIAGNOSTIC__);
+  const next = { ...previous, ...patch };
+  target.__VC_POCKET_DIAGNOSTIC__ = next;
+  persistPocketTtsDiagnostic(next);
+  console.log('[VC-DIAG]', next);
 }
 
 function serializeError(error: unknown): Record<string, unknown> {
@@ -92,24 +95,34 @@ async function getEngine(): Promise<PocketTTS> {
       voiceCloning: true,
       cache: true,
       cacheName: 'voicecraft-pocket-tts-v1',
-      maxThreads: 4,
+      maxThreads: 1,
       ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
     });
 
     diagnosticPatch({ phase: 'engine-load-start' });
 
+    let lastProgressPersisted = 0;
+    let lastProgressLabel = '';
     await instance.load((progress: any) => {
+      const label = String(progress?.label || 'progress');
+      const loaded = Number(progress?.loaded || 0);
+      const total = Number(progress?.total || 0);
+      const labelChanged = label !== lastProgressLabel;
+      const completed = total > 0 && loaded >= total;
+      const crossedCheckpoint = loaded - lastProgressPersisted >= 1024 * 1024;
+      if (!labelChanged && !completed && !crossedCheckpoint) return;
+
       const target = globalThis as any;
       const list = Array.isArray(target.__VC_POCKET_DIAGNOSTIC__?.loadProgress)
         ? target.__VC_POCKET_DIAGNOSTIC__.loadProgress
         : [];
-      const entry = {
-        label: progress?.label,
-        loaded: progress?.loaded,
-        total: progress?.total,
-        fromCache: progress?.fromCache,
-      };
-      diagnosticPatch({ phase: `engine-load:${progress?.label || 'progress'}`, loadProgress: [...list, entry] });
+      const entry = { label, loaded, total, fromCache: progress?.fromCache };
+      diagnosticPatch({
+        phase: `engine-load:${label}`,
+        loadProgress: [...list, entry].slice(-12),
+      });
+      lastProgressPersisted = loaded;
+      lastProgressLabel = label;
     });
 
     engine = instance;
