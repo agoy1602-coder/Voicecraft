@@ -18,18 +18,25 @@ const replacement = `async function loadOrt() {
     if (ort) return;
     post({ type: "status", status: "loading-runtime" });
 
-    // [VoiceCraft] v7: ONNX Runtime JS is bundled locally. The matching WASM
-    // binary is same-origin and is loaded through the v6 offline persistence
-    // layer, so synthesis never depends on jsDelivr/CDN while offline.
+    // [VoiceCraft] v8: keep the ORT JS loader and matching WASM binary
+    // same-origin. ONNX Runtime dynamically imports the .mjs runtime; if its
+    // path is not overridden it resolves relative to the Vite worker chunk
+    // (/assets), which caused the production "Failed to fetch dynamically
+    // imported module" failure.
     ort = __VC_ORT_MODULE.default || __VC_ORT_MODULE;
-    const wasmUrl = new URL('/onnxruntime/ort-wasm-simd-threaded.wasm', self.location.origin).href;
+    const runtimeBase = new URL('/onnxruntime/', self.location.origin).href;
+    const wasmUrl = new URL('ort-wasm-simd-threaded.wasm', runtimeBase).href;
+    const mjsUrl = new URL('ort-wasm-simd-threaded.mjs', runtimeBase).href;
     const wasmBytes = await fetchWithProgress(
         wasmUrl,
         'onnxruntime-wasm',
         (p) => post({ type: 'progress', ...p })
     );
     ort.env.wasm.wasmBinary = wasmBytes.buffer;
-    ort.env.wasm.wasmPaths = undefined;
+    ort.env.wasm.wasmPaths = {
+        'ort-wasm-simd-threaded.mjs': mjsUrl,
+        'ort-wasm-simd-threaded.wasm': wasmUrl,
+    };
     ort.env.wasm.simd = true;
     ort.env.wasm.numThreads = self.crossOriginIsolated
         ? Math.min(navigator.hardwareConcurrency || 4, config.maxThreads || 8)
@@ -39,4 +46,4 @@ const replacement = `async function loadOrt() {
 
 source = source.slice(0, start) + replacement + source.slice(end);
 fs.writeFileSync(workerPath, source);
-console.log('[VoiceCraft] installed Pocket TTS local ONNX Runtime v7');
+console.log('[VoiceCraft] installed Pocket TTS local ONNX Runtime v8');
