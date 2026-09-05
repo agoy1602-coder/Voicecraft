@@ -8,9 +8,83 @@ let engine: PocketTTS | null = null;
 let enginePromise: Promise<PocketTTS> | null = null;
 const activeVoiceRefs = new Map<string, string>();
 
+type DiagnosticState = {
+  phase: string;
+  startedAt: number;
+  completedAt?: number;
+  online: boolean;
+  crossOriginIsolated: boolean;
+  hardwareConcurrency?: number;
+  deviceMemory?: number;
+  cacheEntries?: number;
+  loadProgress?: unknown[];
+  error?: Record<string, unknown>;
+};
+
+function diagnosticPatch(patch: Partial<DiagnosticState>) {
+  const target = globalThis as any;
+  const previous: DiagnosticState = target.__VC_POCKET_DIAGNOSTIC__ || {
+    phase: 'idle',
+    startedAt: Date.now(),
+    online: navigator.onLine,
+    crossOriginIsolated: globalThis.crossOriginIsolated,
+    hardwareConcurrency: navigator.hardwareConcurrency,
+    deviceMemory: (navigator as any).deviceMemory,
+    loadProgress: [],
+  };
+  target.__VC_POCKET_DIAGNOSTIC__ = { ...previous, ...patch };
+  console.log('[VC-DIAG]', target.__VC_POCKET_DIAGNOSTIC__);
+}
+
+function serializeError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+      cause: error.cause instanceof Error ? { name: error.cause.name, message: error.cause.message, stack: error.cause.stack } : error.cause,
+    };
+  }
+  if (error && typeof error === 'object') {
+    return Object.fromEntries(Object.getOwnPropertyNames(error).map((key) => [key, (error as any)[key]]));
+  }
+  return { value: String(error) };
+}
+
+async function getCacheEntryCount(): Promise<number | undefined> {
+  try {
+    if (typeof caches === 'undefined') return undefined;
+    const cache = await caches.open('voicecraft-pocket-tts-v1');
+    return (await cache.keys()).length;
+  } catch {
+    return undefined;
+  }
+}
+
 async function getEngine(): Promise<PocketTTS> {
-  if (engine) return engine;
-  if (enginePromise) return enginePromise;
+  if (engine) {
+    diagnosticPatch({ phase: 'engine-reused' });
+    return engine;
+  }
+  if (enginePromise) {
+    diagnosticPatch({ phase: 'engine-load-already-running' });
+    return enginePromise;
+  }
+
+  const startedAt = Date.now();
+  diagnosticPatch({
+    phase: 'engine-constructing',
+    startedAt,
+    completedAt: undefined,
+    online: navigator.onLine,
+    crossOriginIsolated: globalThis.crossOriginIsolated,
+    hardwareConcurrency: navigator.hardwareConcurrency,
+    deviceMemory: (navigator as any).deviceMemory,
+    cacheEntries: await getCacheEntryCount(),
+    loadProgress: [],
+    error: undefined,
+  });
+
   enginePromise = (async () => {
     const instance = new PocketTTS({
       language: 'english_2026-04',
@@ -19,28 +93,53 @@ async function getEngine(): Promise<PocketTTS> {
       cache: true,
       cacheName: 'voicecraft-pocket-tts-v1',
       maxThreads: 4,
-      // Keep the ONNX Runtime JavaScript/WASM runtime on the same origin as
-      // VoiceCraft so cloned-voice inference does not depend on a CDN offline.
       ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
     });
-    await instance.load();
+
+    diagnosticPatch({ phase: 'engine-load-start' });
+
+    await instance.load((progress: any) => {
+      const target = globalThis as any;
+      const list = Array.isArray(target.__VC_POCKET_DIAGNOSTIC__?.loadProgress)
+        ? target.__VC_POCKET_DIAGNOSTIC__.loadProgress
+        : [];
+      const entry = {
+        label: progress?.label,
+        loaded: progress?.loaded,
+        total: progress?.total,
+        fromCache: progress?.fromCache,
+      };
+      diagnosticPatch({ phase: `engine-load:${progress?.label || 'progress'}`, loadProgress: [...list, entry] });
+    });
+
     engine = instance;
+    diagnosticPatch({ phase: 'engine-load-success', completedAt: Date.now(), cacheEntries: await getCacheEntryCount() });
     return instance;
   })();
+
   try {
     return await enginePromise;
   } catch (error) {
+    const details = serializeError(error);
     enginePromise = null;
     engine = null;
+    diagnosticPatch({ phase: 'engine-load-failure', completedAt: Date.now(), error: details, cacheEntries: await getCacheEntryCount() });
+    console.error('[VC-DIAG] Pocket TTS engine load failure:', details);
     throw error;
   }
 }
 
 async function decodeReference(blob: Blob): Promise<{ audio: Float32Array; sampleRate: number; duration: number }> {
+  diagnosticPatch({ phase: 'reference-decode-start' });
   const context = new AudioContext();
   try {
     const decoded = await context.decodeAudioData(await blob.arrayBuffer());
+    diagnosticPatch({ phase: 'reference-decode-success' });
     return { audio: new Float32Array(decoded.getChannelData(0)), sampleRate: decoded.sampleRate, duration: decoded.duration };
+  } catch (error) {
+    const details = serializeError(error);
+    diagnosticPatch({ phase: 'reference-decode-failure', error: details });
+    throw error;
   } finally {
     await context.close().catch(() => undefined);
   }
@@ -81,21 +180,29 @@ function makeProfile(name: string, voiceRef: string, sampleDuration: number, not
 }
 
 async function cloneLocally(name: string, blob: Blob, notes: string): Promise<ClonedVoiceProfile> {
+  diagnosticPatch({ phase: 'clone-start' });
   const tts = await getEngine();
   const decoded = await decodeReference(blob);
-  const voiceRef = await tts.cloneVoice(decoded.audio, { inputSampleRate: decoded.sampleRate, name });
-  const sampleBase64 = await blobToBase64(blob);
-  const profile = makeProfile(name, voiceRef, Number(decoded.duration.toFixed(2)), notes, sampleBase64, blob.type || 'audio/webm');
-  activeVoiceRefs.set(profile.id, voiceRef);
-  return profile;
+  diagnosticPatch({ phase: 'cloneVoice-start' });
+  try {
+    const voiceRef = await tts.cloneVoice(decoded.audio, { inputSampleRate: decoded.sampleRate, name });
+    diagnosticPatch({ phase: 'cloneVoice-success', completedAt: Date.now() });
+    const sampleBase64 = await blobToBase64(blob);
+    const profile = makeProfile(name, voiceRef, Number(decoded.duration.toFixed(2)), notes, sampleBase64, blob.type || 'audio/webm');
+    activeVoiceRefs.set(profile.id, voiceRef);
+    return profile;
+  } catch (error) {
+    const details = serializeError(error);
+    diagnosticPatch({ phase: 'cloneVoice-failure', completedAt: Date.now(), error: details });
+    console.error('[VC-DIAG] cloneVoice failure:', details);
+    throw error;
+  }
 }
 
 async function ensureVoiceRef(voice: ClonedVoiceProfile): Promise<string> {
   const cached = activeVoiceRefs.get(voice.id);
   if (cached) return cached;
-  if (!voice.providerSampleBase64) {
-    throw new Error('This saved Pocket TTS voice has no encrypted reference sample. Please create the clone again.');
-  }
+  if (!voice.providerSampleBase64) throw new Error('This saved Pocket TTS voice has no encrypted reference sample. Please create the clone again.');
   const tts = await getEngine();
   const blob = await base64ToBlob(voice.providerSampleBase64, voice.providerSampleMimeType || 'audio/webm');
   const decoded = await decodeReference(blob);
@@ -171,14 +278,7 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
     tags: ['voice-clone', 'pocket-tts', options.tone, options.language, voice.name],
   };
 
-  return {
-    clip,
-    audioBuffer,
-    isOffline: true,
-    isQuotaFallback: false,
-    latencyMs: Math.round(performance.now() - start),
-    engine: 'offline',
-  };
+  return { clip, audioBuffer, isOffline: true, isQuotaFallback: false, latencyMs: Math.round(performance.now() - start), engine: 'offline' };
 }
 
 export function installPocketTtsBridge(): void {
@@ -188,8 +288,10 @@ export function installPocketTtsBridge(): void {
     try {
       return await cloneLocally(name, sampleBlob, notes);
     } catch (error) {
-      console.error('[VoiceCraft] Pocket TTS voice cloning failed:', error);
-      throw new Error('Browser voice cloning could not initialize on this device. No fake clone profile was created. Please try again with a shorter, clean recording or a more capable browser/device.');
+      const details = serializeError(error);
+      diagnosticPatch({ phase: 'clone-request-failure', completedAt: Date.now(), error: details });
+      console.error('[VoiceCraft] Pocket TTS voice cloning failed:', details);
+      throw new Error(`Pocket TTS diagnostic failure: ${details.name || 'Error'}: ${details.message || String(error)}`);
     }
   };
 
