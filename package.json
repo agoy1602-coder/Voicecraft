@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "node scripts/normalize-pocket-tts-worker.cjs && node scripts/patch-pocket-tts-download.cjs && node scripts/normalize-pocket-tts-worker.cjs && vite build",
+    "build": "node scripts/normalize-pocket-tts-worker.cjs && (grep -q \"offline persistence downloader v6\" node_modules/pocket-tts-js/src/worker.js || node scripts/patch-pocket-tts-download-v6.cjs) && node scripts/patch-pocket-tts-offline-v7.cjs && node scripts/prepare-onnxruntime-web.cjs && vite build",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.cjs",
@@ -22,7 +22,8 @@
     "express": "^4.21.2",
     "dotenv": "^17.2.3",
     "motion": "^12.23.24",
-    "pocket-tts-js": "0.1.0"
+    "pocket-tts-js": "0.1.0",
+    "@vercel/node": "^5.4.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
