@@ -18,11 +18,10 @@ const replacement = `async function loadOrt() {
     if (ort) return;
     post({ type: "status", status: "loading-runtime" });
 
-    // [VoiceCraft] v8: keep the ORT JS loader and matching WASM binary
-    // same-origin. ONNX Runtime dynamically imports the .mjs runtime; if its
-    // path is not overridden it resolves relative to the Vite worker chunk
-    // (/assets), which caused the production "Failed to fetch dynamically
-    // imported module" failure.
+    // [VoiceCraft] v9: explicitly override both ORT runtime artifacts.
+    // ONNX Runtime expects the WasmFilePaths object shape { mjs, wasm }.
+    // Using filename keys is ignored by current onnxruntime-web releases,
+    // which makes the .mjs loader fall back to the Vite /assets/ path.
     ort = __VC_ORT_MODULE.default || __VC_ORT_MODULE;
     const runtimeBase = new URL('/onnxruntime/', self.location.origin).href;
     const wasmUrl = new URL('ort-wasm-simd-threaded.wasm', runtimeBase).href;
@@ -32,11 +31,11 @@ const replacement = `async function loadOrt() {
         'onnxruntime-wasm',
         (p) => post({ type: 'progress', ...p })
     );
-    ort.env.wasm.wasmBinary = wasmBytes.buffer;
     ort.env.wasm.wasmPaths = {
-        'ort-wasm-simd-threaded.mjs': mjsUrl,
-        'ort-wasm-simd-threaded.wasm': wasmUrl,
+        mjs: mjsUrl,
+        wasm: wasmUrl,
     };
+    ort.env.wasm.wasmBinary = wasmBytes.buffer;
     ort.env.wasm.simd = true;
     ort.env.wasm.numThreads = self.crossOriginIsolated
         ? Math.min(navigator.hardwareConcurrency || 4, config.maxThreads || 8)
@@ -46,4 +45,4 @@ const replacement = `async function loadOrt() {
 
 source = source.slice(0, start) + replacement + source.slice(end);
 fs.writeFileSync(workerPath, source);
-console.log('[VoiceCraft] installed Pocket TTS local ONNX Runtime v8');
+console.log('[VoiceCraft] installed Pocket TTS local ONNX Runtime v9');
