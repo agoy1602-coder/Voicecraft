@@ -95,26 +95,34 @@ async function getEngine(): Promise<PocketTTS> {
       voiceCloning: true,
       cache: true,
       cacheName: 'voicecraft-pocket-tts-v1',
-      // Isolated experiment: single-threaded WASM. The trace shows the stall
-      // after flow_lm_main bytes are cached, during ONNX session initialization.
       maxThreads: 1,
       ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
     });
 
     diagnosticPatch({ phase: 'engine-load-start' });
 
+    let lastProgressPersisted = 0;
+    let lastProgressLabel = '';
     await instance.load((progress: any) => {
+      const label = String(progress?.label || 'progress');
+      const loaded = Number(progress?.loaded || 0);
+      const total = Number(progress?.total || 0);
+      const labelChanged = label !== lastProgressLabel;
+      const completed = total > 0 && loaded >= total;
+      const crossedCheckpoint = loaded - lastProgressPersisted >= 1024 * 1024;
+      if (!labelChanged && !completed && !crossedCheckpoint) return;
+
       const target = globalThis as any;
       const list = Array.isArray(target.__VC_POCKET_DIAGNOSTIC__?.loadProgress)
         ? target.__VC_POCKET_DIAGNOSTIC__.loadProgress
         : [];
-      const entry = {
-        label: progress?.label,
-        loaded: progress?.loaded,
-        total: progress?.total,
-        fromCache: progress?.fromCache,
-      };
-      diagnosticPatch({ phase: `engine-load:${progress?.label || 'progress'}`, loadProgress: [...list, entry] });
+      const entry = { label, loaded, total, fromCache: progress?.fromCache };
+      diagnosticPatch({
+        phase: `engine-load:${label}`,
+        loadProgress: [...list, entry].slice(-12),
+      });
+      lastProgressPersisted = loaded;
+      lastProgressLabel = label;
     });
 
     engine = instance;
