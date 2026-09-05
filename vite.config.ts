@@ -32,8 +32,6 @@ function offlineOrtRuntimePlugin(): Plugin {
 }
 
 export default defineConfig(() => {
-  // GitHub Pages serves the app from /Voicecraft/, while the Vercel
-  // frontend serves it from the domain root. Keep both deployments valid.
   const isVercel = process.env.VERCEL === '1';
   const base = isVercel ? '/' : '/Voicecraft/';
   const appPath = isVercel ? '' : '/Voicecraft';
@@ -62,6 +60,24 @@ export default defineConfig(() => {
           globPatterns: ['**/*.{js,css,html,mjs,wasm,svg,ico,png,webp}'],
           maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
           mode: 'development',
+          runtimeCaching: [
+            {
+              urlPattern: /^https:\/\/huggingface\.co\/vlapky\/pocket-tts-onnx\/resolve\/main\/onnx\/english_2026-04\/.*$/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'voicecraft-pocket-tts-offline-v1',
+                cacheableResponse: {statuses: [200]},
+              },
+            },
+            {
+              urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/onnxruntime-web@1\.20\.0\/dist\/.*$/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'voicecraft-ort-offline-v1',
+                cacheableResponse: {statuses: [200]},
+              },
+            },
+          ],
         },
       }),
     ],
@@ -71,10 +87,7 @@ export default defineConfig(() => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };
