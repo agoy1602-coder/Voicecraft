@@ -35,6 +35,19 @@ async function getEngine(): Promise<PocketTTS> {
   }
 }
 
+/**
+ * Warm the Pocket TTS model/runtime cache without blocking the UI.
+ *
+ * Create Clone intentionally stays fast and does not await this. The first
+ * online app session must nevertheless load Pocket TTS while connected so its
+ * model bundle, voice-cloning encoder and ORT runtime can be persisted in the
+ * browser cache for a later fully-offline synthesis.
+ */
+export async function preloadPocketTtsRuntime(): Promise<void> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+  await getEngine();
+}
+
 async function decodeReference(blob: Blob): Promise<{ audio: Float32Array; sampleRate: number; duration: number }> {
   const context = new AudioContext();
   try {
@@ -154,4 +167,15 @@ export function installPocketTtsBridge(): void {
     }
     return originalGenerate(options);
   };
+
+  // Do not block Create Clone or first paint. When the app is online, warm the
+  // Pocket TTS cache in the background so a later network-offline synthesis has
+  // the complete model + encoder + ORT runtime already persisted locally.
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    setTimeout(() => {
+      void preloadPocketTtsRuntime().catch((error) => {
+        console.warn('[VoiceCraft] Pocket TTS offline cache prewarm failed:', error);
+      });
+    }, 0);
+  }
 }
