@@ -9,6 +9,13 @@
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type" },
         { "key": "Access-Control-Max-Age", "value": "86400" }
       ]
+    },
+    {
+      "source": "/",
+      "headers": [
+        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
+        { "key": "Cross-Origin-Embedder-Policy", "value": "credentialless" }
+      ]
     }
   ]
 }
