@@ -3,11 +3,135 @@ import type { ClonedVoiceProfile, AudioClip, AudioSentence } from '../types';
 import type { TTSGenerateOptions, TTSResult } from './ttsService';
 import { ttsService } from './ttsService';
 
+const CACHE_NAME = 'voicecraft-pocket-tts-v1';
+const READINESS_KEY = 'voicecraft-pocket-tts-readiness-v1';
+const MODEL_VERSION = 'english_2026-04-int8-clone-v1';
+const ENGINE_LOAD_TIMEOUT_MS = 12 * 60 * 1000;
+const REQUIRED_MODEL_FILES = [
+  'bundle.json',
+  'tokenizer.model',
+  'mimi_encoder_int8.onnx',
+  'text_conditioner_int8.onnx',
+  'flow_lm_main_int8.onnx',
+  'flow_lm_flow_int8.onnx',
+  'mimi_decoder_int8.onnx',
+  'bos_before_voice.npy',
+] as const;
+const REQUIRED_ORT_FILES = [
+  'ort.min.mjs',
+  'ort-wasm-simd-threaded.mjs',
+  'ort-wasm-simd-threaded.wasm',
+] as const;
+
 let engine: PocketTTS | null = null;
 let enginePromise: Promise<PocketTTS> | null = null;
 const activeVoiceRefs = new Map<string, string>();
 
-async function getEngine(): Promise<PocketTTS> {
+type PocketProgress = {
+  label?: string;
+  loaded?: number;
+  total?: number;
+  fromCache?: boolean;
+};
+
+export type PocketTtsOfflineStatus = {
+  ready: boolean;
+  version: string | null;
+  cachedModels: string[];
+  missingModels: string[];
+  missingOrt: string[];
+};
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function markReadiness(status: PocketTtsOfflineStatus): void {
+  if (!status.ready) {
+    localStorage.removeItem(READINESS_KEY);
+    return;
+  }
+  localStorage.setItem(READINESS_KEY, JSON.stringify({ version: MODEL_VERSION, verifiedAt: Date.now() }));
+}
+
+async function verifyOfflineAssets(): Promise<PocketTtsOfflineStatus> {
+  const cachedModels = new Set<string>();
+  const missingModels: string[] = [];
+  const missingOrt: string[] = [];
+
+  if (typeof caches === 'undefined') {
+    return {
+      ready: false,
+      version: null,
+      cachedModels: [],
+      missingModels: [...REQUIRED_MODEL_FILES],
+      missingOrt: [...REQUIRED_ORT_FILES],
+    };
+  }
+
+  try {
+    const modelCache = await caches.open(CACHE_NAME);
+    const keys = await modelCache.keys();
+    for (const request of keys) {
+      const path = new URL(request.url).pathname;
+      for (const filename of REQUIRED_MODEL_FILES) {
+        if (path.endsWith(`/${filename}`)) cachedModels.add(filename);
+      }
+    }
+  } catch {
+    missingModels.push(...REQUIRED_MODEL_FILES);
+  }
+
+  for (const filename of REQUIRED_MODEL_FILES) {
+    if (!cachedModels.has(filename) && !missingModels.includes(filename)) missingModels.push(filename);
+  }
+
+  for (const filename of REQUIRED_ORT_FILES) {
+    const url = new URL(`${import.meta.env.BASE_URL}ort/${filename}`, window.location.origin).toString();
+    try {
+      const response = await caches.match(url);
+      if (!response) missingOrt.push(filename);
+    } catch {
+      missingOrt.push(filename);
+    }
+  }
+
+  let version: string | null = null;
+  try {
+    const raw = localStorage.getItem(READINESS_KEY);
+    if (raw) version = JSON.parse(raw)?.version || null;
+  } catch {
+    version = null;
+  }
+
+  const ready = version === MODEL_VERSION && missingModels.length === 0 && missingOrt.length === 0;
+  return { ready, version, cachedModels: [...cachedModels], missingModels, missingOrt };
+}
+
+async function cacheSameOriginOrtAssets(): Promise<void> {
+  if (typeof caches === 'undefined') throw new Error('Browser Cache Storage is unavailable on this device.');
+  const cache = await caches.open('voicecraft-pocket-tts-assets-v1');
+  for (const filename of REQUIRED_ORT_FILES) {
+    const url = new URL(`${import.meta.env.BASE_URL}ort/${filename}`, window.location.origin).toString();
+    const response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Could not prepare local ONNX Runtime asset: ${filename}`);
+    await cache.put(url, response.clone());
+  }
+}
+
+async function getEngine(onProgress?: (progress: PocketProgress) => void): Promise<PocketTTS> {
   if (engine) return engine;
   if (enginePromise) return enginePromise;
   enginePromise = (async () => {
@@ -16,13 +140,15 @@ async function getEngine(): Promise<PocketTTS> {
       quantized: true,
       voiceCloning: true,
       cache: true,
-      cacheName: 'voicecraft-pocket-tts-v1',
+      cacheName: CACHE_NAME,
       maxThreads: 4,
-      // Keep the ONNX Runtime JavaScript/WASM runtime on the same origin as
-      // VoiceCraft so cloned-voice inference does not depend on a CDN offline.
       ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
     });
-    await instance.load();
+    await withTimeout(
+      instance.load((progress: PocketProgress) => onProgress?.(progress)),
+      ENGINE_LOAD_TIMEOUT_MS,
+      'Pocket TTS model preparation timed out. Check your connection and available browser storage, then try again.',
+    );
     engine = instance;
     return instance;
   })();
@@ -33,6 +159,32 @@ async function getEngine(): Promise<PocketTTS> {
     engine = null;
     throw error;
   }
+}
+
+export async function getPocketTtsOfflineStatus(): Promise<PocketTtsOfflineStatus> {
+  const status = await verifyOfflineAssets();
+  markReadiness(status);
+  return status;
+}
+
+export async function preparePocketTtsOffline(
+  onProgress?: (progress: PocketProgress) => void,
+): Promise<PocketTtsOfflineStatus> {
+  if (!navigator.onLine) {
+    throw new Error('Connect to the internet once to install and verify the offline Pocket TTS models.');
+  }
+  onProgress?.({ label: 'Preparing local ONNX Runtime…', loaded: 0, total: 1 });
+  await cacheSameOriginOrtAssets();
+  onProgress?.({ label: 'Downloading and verifying Pocket TTS English voice-cloning models…', loaded: 0, total: 1 });
+  await getEngine(onProgress);
+  const status = await verifyOfflineAssets();
+  markReadiness(status);
+  if (!status.ready) {
+    throw new Error(
+      `Offline model verification failed. Missing Pocket assets: ${status.missingModels.join(', ') || 'none'}; missing local runtime: ${status.missingOrt.join(', ') || 'none'}.`,
+    );
+  }
+  return status;
 }
 
 async function decodeReference(blob: Blob): Promise<{ audio: Float32Array; sampleRate: number; duration: number }> {
@@ -95,14 +247,30 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
   const start = performance.now();
   const voice = options.voice as ClonedVoiceProfile;
   if (voice.provider !== 'pocket-tts') throw new Error('This cloned profile is not a Pocket TTS voice.');
+  if (options.language !== 'en-US') {
+    throw new Error('Offline cloned speech currently supports English (en-US) only. Other language choices are not connected to the local Pocket TTS bundle yet.');
+  }
+
+  let status = await verifyOfflineAssets();
+  if (!status.ready) {
+    if (!navigator.onLine) {
+      throw new Error('Offline speech models are not installed or verified on this device. Connect once and choose “Prepare Offline Voice Engine” before going offline.');
+    }
+    status = await preparePocketTtsOffline();
+  }
+  if (!status.ready) throw new Error('Offline speech models are not verified and cannot be used safely.');
 
   const tts = await getEngine();
   const voiceRef = await ensureVoiceRef(voice);
   const chunks: Float32Array[] = [];
-  const metrics = await tts.generate(options.text, {
-    voice: voiceRef,
-    onChunk: (chunk) => chunks.push(new Float32Array(chunk)),
-  });
+  const metrics = await withTimeout(
+    tts.generate(options.text, {
+      voice: voiceRef,
+      onChunk: (chunk) => chunks.push(new Float32Array(chunk)),
+    }),
+    ENGINE_LOAD_TIMEOUT_MS,
+    'Pocket TTS synthesis timed out. No cloud TTS fallback was used.',
+  );
   if (!chunks.length) throw new Error('Pocket TTS returned no audio for the cloned voice.');
 
   const wavBlob = chunksToWavBlob(chunks, tts.sampleRate);
@@ -144,8 +312,8 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
 }
 
 export function installPocketTtsBridge(): void {
-  // Create Clone must only persist the reference sample. Pocket TTS inference is
-  // intentionally lazy and begins only when the user actually synthesizes speech.
+  // Create Clone remains reference-only and fast. Pocket TTS initialization is
+  // deliberately deferred until offline models are prepared or synthesis starts.
   const tts = ttsService as any;
   const originalGenerate = tts.generateSpeech.bind(tts);
   tts.generateSpeech = async function(options: TTSGenerateOptions) {
