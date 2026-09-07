@@ -116,9 +116,6 @@ async function verifyOfflineAssets(): Promise<PocketTtsOfflineStatus> {
     version = null;
   }
 
-  // Cache contents are the authoritative readiness proof. The localStorage
-  // marker is only metadata and must not make an already-complete cache fail
-  // verification (for example after a fresh browser/session or marker loss).
   const ready = missingModels.length === 0 && missingOrt.length === 0;
   return { ready, version, cachedModels: [...cachedModels], missingModels, missingOrt };
 }
@@ -144,7 +141,10 @@ async function getEngine(onProgress?: (progress: PocketProgress) => void): Promi
       voiceCloning: true,
       cache: true,
       cacheName: CACHE_NAME,
-      maxThreads: 4,
+      // Keep the page cross-origin isolated for compatibility, but run Pocket
+      // TTS WASM inference single-threaded. The previous 4-thread configuration
+      // is the confirmed worker-crash boundary during ONNX session creation.
+      maxThreads: 1,
       ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
     });
     await withTimeout(
@@ -254,9 +254,6 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
     throw new Error('Offline cloned speech currently supports English (en-US) only. Other language choices are not connected to the local Pocket TTS bundle yet.');
   }
 
-  // Online synthesis must not depend on offline readiness. getEngine() uses
-  // Pocket TTS Cache Storage when available and downloads the missing model
-  // assets from the configured model source when online.
   if (!navigator.onLine) {
     const status = await verifyOfflineAssets();
     if (!status.ready) {
@@ -316,8 +313,6 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
 }
 
 export function installPocketTtsBridge(): void {
-  // Create Clone remains reference-only and fast. Pocket TTS initialization is
-  // deliberately deferred until offline models are prepared or synthesis starts.
   const tts = ttsService as any;
   const originalGenerate = tts.generateSpeech.bind(tts);
   tts.generateSpeech = async function(options: TTSGenerateOptions) {
