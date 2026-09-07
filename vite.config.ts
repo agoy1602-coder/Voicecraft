@@ -21,9 +21,10 @@ function offlineOrtRuntimePlugin(): Plugin {
 function pocketTtsSessionCompatibilityPlugin(): Plugin {
   return { name: 'voicecraft-pocket-tts-session-compatibility', transform(code, id) {
     if (!id.replace(/\\/g, '/').endsWith('/pocket-tts-js/src/worker.js')) return null;
-    const needle = 'graphOptimizationLevel: "all"';
+    const needle = `async function createSession(language, name, onProgress) {\n    const bytes = await fetchWithProgress(modelUrl(language, stem(name)), name, onProgress);\n    return ort.InferenceSession.create(bytes, {\n        executionProviders: ["wasm"],\n        graphOptimizationLevel: "all",\n    });\n}`;
     if (!code.includes(needle)) return null;
-    return { code: code.replace(needle, 'graphOptimizationLevel: "disabled"'), map: null };
+    const replacement = `async function createSession(language, name, onProgress) {\n    const bytes = await fetchWithProgress(modelUrl(language, stem(name)), name, onProgress);\n    const graphOptimizationLevel = name === "mimi_encoder" ? "basic" : "all";\n    return ort.InferenceSession.create(bytes, {\n        executionProviders: ["wasm"],\n        graphOptimizationLevel,\n    });\n}`;
+    return { code: code.replace(needle, replacement), map: null };
   }};
 }
 
