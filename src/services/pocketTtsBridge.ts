@@ -254,14 +254,15 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
     throw new Error('Offline cloned speech currently supports English (en-US) only. Other language choices are not connected to the local Pocket TTS bundle yet.');
   }
 
-  let status = await verifyOfflineAssets();
-  if (!status.ready) {
-    if (!navigator.onLine) {
+  // Online synthesis must not depend on offline readiness. getEngine() uses
+  // Pocket TTS Cache Storage when available and downloads the missing model
+  // assets from the configured model source when online.
+  if (!navigator.onLine) {
+    const status = await verifyOfflineAssets();
+    if (!status.ready) {
       throw new Error('Offline speech models are not installed or verified on this device. Connect once and choose “Prepare Offline Voice Engine” before going offline.');
     }
-    status = await preparePocketTtsOffline();
   }
-  if (!status.ready) throw new Error('Offline speech models are not verified and cannot be used safely.');
 
   const tts = await getEngine();
   const voiceRef = await ensureVoiceRef(voice);
