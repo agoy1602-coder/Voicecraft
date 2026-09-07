@@ -6,28 +6,71 @@ import { ttsService } from './ttsService';
 let engine: PocketTTS | null = null;
 let enginePromise: Promise<PocketTTS> | null = null;
 const activeVoiceRefs = new Map<string, string>();
+const POCKET_CACHE = 'voicecraft-pocket-tts-v1';
+
+function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    const details = error.message || error.name;
+    return details ? `${error.name}: ${details}` : error.name;
+  }
+  return String(error);
+}
+
+async function createEngine(): Promise<PocketTTS> {
+  const baseUrl = `${import.meta.env.BASE_URL}ort/`;
+  const instance = new PocketTTS({
+    language: 'english_2026-04',
+    quantized: true,
+    voiceCloning: true,
+    cache: true,
+    cacheName: POCKET_CACHE,
+    maxThreads: 4,
+    // Keep ORT on the VoiceCraft origin. This is required for offline inference
+    // and avoids making cloned-voice synthesis depend on a CDN at runtime.
+    ortBaseUrl: baseUrl,
+  });
+
+  try {
+    await instance.load();
+    return instance;
+  } catch (error) {
+    throw new Error(`Pocket TTS initialization failed (runtime/model load): ${describeError(error)}`, { cause: error });
+  }
+}
 
 async function getEngine(): Promise<PocketTTS> {
   if (engine) return engine;
   if (enginePromise) return enginePromise;
+
   enginePromise = (async () => {
-    const instance = new PocketTTS({
-      language: 'english_2026-04',
-      quantized: true,
-      voiceCloning: true,
-      cache: true,
-      cacheName: 'voicecraft-pocket-tts-v1',
-      maxThreads: 4,
-      // Keep the ONNX Runtime JavaScript/WASM runtime on the same origin as
-      // VoiceCraft so cloned-voice inference does not depend on a CDN offline.
-      ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
-    });
-    await instance.load();
-    engine = instance;
-    return instance;
+    try {
+      return await createEngine();
+    } catch (firstError) {
+      // A partially populated/stale Cache Storage bucket can make ORT or an ONNX
+      // session fail even though all expected filenames appear in the cache.
+      // Recover only on initialization failure: remove the Pocket bucket and let
+      // the library download a clean set on the second attempt. Create Clone is
+      // untouched because this path is reached only during speech synthesis.
+      try {
+        await PocketTTS.clearCache(POCKET_CACHE);
+      } catch {
+        // Cache deletion is best-effort; preserve the original initialization error.
+      }
+
+      try {
+        return await createEngine();
+      } catch (secondError) {
+        throw new Error(
+          `Pocket TTS could not initialize after cache recovery. First attempt: ${describeError(firstError)}. Recovery attempt: ${describeError(secondError)}`,
+          { cause: secondError },
+        );
+      }
+    }
   })();
+
   try {
-    return await enginePromise;
+    engine = await enginePromise;
+    return engine;
   } catch (error) {
     enginePromise = null;
     engine = null;
