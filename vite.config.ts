@@ -31,6 +31,28 @@ function offlineOrtRuntimePlugin(): Plugin {
   };
 }
 
+// The Pocket TTS worker currently asks ONNX Runtime Web to run full graph
+// optimization while creating the Mimi encoder session. The deployed trace
+// proves that the failure boundary is inside that session creation, after the
+// model has been fetched and after ORT/thread isolation has been verified.
+// Keep the model, execution provider, inference code, and all other sessions
+// unchanged; only disable the expensive graph-optimization pass for this
+// worker's session construction.
+function pocketTtsSessionCompatibilityPlugin(): Plugin {
+  return {
+    name: 'voicecraft-pocket-tts-session-compatibility',
+    transform(code, id) {
+      if (!id.replace(/\\/g, '/').endsWith('/pocket-tts-js/src/worker.js')) return null;
+      const needle = 'graphOptimizationLevel: "all"';
+      if (!code.includes(needle)) return null;
+      return {
+        code: code.replace(needle, 'graphOptimizationLevel: "disabled"'),
+        map: null,
+      };
+    },
+  };
+}
+
 export default defineConfig(() => {
   // GitHub Pages serves the app from /Voicecraft/, while the Vercel
   // frontend serves it from the domain root. Keep both deployments valid.
@@ -43,6 +65,7 @@ export default defineConfig(() => {
     plugins: [
       react(),
       tailwindcss(),
+      pocketTtsSessionCompatibilityPlugin(),
       offlineOrtRuntimePlugin(),
       VitePWA({
         registerType: 'autoUpdate',
