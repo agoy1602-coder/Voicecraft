@@ -116,7 +116,10 @@ async function verifyOfflineAssets(): Promise<PocketTtsOfflineStatus> {
     version = null;
   }
 
-  const ready = version === MODEL_VERSION && missingModels.length === 0 && missingOrt.length === 0;
+  // Cache contents are the authoritative readiness proof. The localStorage
+  // marker is only metadata and must not make an already-complete cache fail
+  // verification (for example after a fresh browser/session or marker loss).
+  const ready = missingModels.length === 0 && missingOrt.length === 0;
   return { ready, version, cachedModels: [...cachedModels], missingModels, missingOrt };
 }
 
