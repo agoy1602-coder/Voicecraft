@@ -33,7 +33,7 @@ export default defineConfig(() => {
   const base = isVercel ? '/' : '/Voicecraft/';
   const appPath = isVercel ? '' : '/Voicecraft';
   return { base, plugins: [react(), tailwindcss(), pocketTtsSessionCompatibilityPlugin(), offlineOrtRuntimePlugin(), VitePWA({
-    registerType: 'autoUpdate', includeAssets: ['manifest.webmanifest'], manifest: { name: 'VoiceCraft AI', short_name: 'VoiceCraft', description: 'Neural text-to-speech and local voice cloning studio with offline synthesis.', start_url: `${appPath || ''}/`, scope: `${appPath || ''}/`, display: 'standalone', background_color: '#020617', theme_color: '#7c3aed' },
+    registerType: 'autoUpdate', manifest: { name: 'VoiceCraft AI', short_name: 'VoiceCraft', description: 'Neural text-to-speech and local voice cloning studio with offline synthesis.', start_url: `${appPath || ''}/`, scope: `${appPath || ''}/`, display: 'standalone', background_color: '#020617', theme_color: '#7c3aed' },
     workbox: { navigateFallback: `${appPath}/index.html`, globPatterns: ['**/*.{js,css,html,mjs,wasm,svg,ico,png,webp}'], maximumFileSizeToCacheInBytes: 15 * 1024 * 1024, mode: 'development' },
   })], resolve: { alias: { '@': path.resolve(__dirname, '.') } }, server: { hmr: process.env.DISABLE_HMR !== 'true', watch: process.env.DISABLE_HMR === 'true' ? null : {} } };
 });
