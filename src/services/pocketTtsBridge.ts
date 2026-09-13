@@ -144,7 +144,7 @@ async function getEngine(onProgress?: (progress: PocketProgress) => void): Promi
       voiceCloning: true,
       cache: true,
       cacheName: CACHE_NAME,
-      maxThreads: 4,
+      maxThreads: 1,
       ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
     });
     await withTimeout(
