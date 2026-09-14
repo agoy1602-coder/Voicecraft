@@ -1,4 +1,6 @@
 import { PocketTTS, chunksToWavBlob } from 'pocket-tts-js';
+import { processOffline } from '@soundtouchjs/formant-correction-worklet';
+import processorUrl from '@soundtouchjs/formant-correction-worklet/processor?url';
 import type { ClonedVoiceProfile, AudioClip, AudioSentence } from '../types';
 import type { TTSGenerateOptions, TTSResult } from './ttsService';
 import { ttsService } from './ttsService';
@@ -246,6 +248,49 @@ function sentenceTimings(text: string, duration: number): AudioSentence[] {
   });
 }
 
+function audioBufferToWavBlob(audioBuffer: AudioBuffer): Blob {
+  const channel = audioBuffer.getChannelData(0);
+  const pcm16 = new Int16Array(channel.length);
+  for (let i = 0; i < channel.length; i++) {
+    const sample = Math.max(-1, Math.min(1, channel[i]));
+    pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+  const buffer = new ArrayBuffer(44 + pcm16.length * 2);
+  const view = new DataView(buffer);
+  const write = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i));
+  };
+  write(0, 'RIFF');
+  view.setUint32(4, 36 + pcm16.length * 2, true);
+  write(8, 'WAVE');
+  write(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, audioBuffer.sampleRate, true);
+  view.setUint32(28, audioBuffer.sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  write(36, 'data');
+  view.setUint32(40, pcm16.length * 2, true);
+  for (let i = 0; i < pcm16.length; i++) view.setInt16(44 + i * 2, pcm16[i], true);
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+async function applyVoicePitchAndSpeed(audioBuffer: AudioBuffer, pitch: number, speed: number): Promise<AudioBuffer> {
+  const safePitch = Math.max(0.1, Math.min(8, Number.isFinite(pitch) && pitch > 0 ? pitch : 1));
+  const safeSpeed = Math.max(0.1, Math.min(8, Number.isFinite(speed) && speed > 0 ? speed : 1));
+  if (Math.abs(safePitch - 1) < 0.0001 && Math.abs(safeSpeed - 1) < 0.0001) return audioBuffer;
+  const pitchSemitones = Math.max(-24, Math.min(24, 12 * Math.log2(safePitch)));
+  return processOffline({
+    input: audioBuffer,
+    processorUrl,
+    pitchSemitones,
+    playbackRate: safeSpeed,
+    formantStrength: 1,
+  });
+}
+
 async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> {
   const start = performance.now();
   const voice = options.voice as ClonedVoiceProfile;
@@ -277,12 +322,16 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
   );
   if (!chunks.length) throw new Error('Pocket TTS returned no audio for the cloned voice.');
 
-  const wavBlob = chunksToWavBlob(chunks, tts.sampleRate);
+  const rawWavBlob = chunksToWavBlob(chunks, tts.sampleRate);
   const ctx = new AudioContext({ sampleRate: tts.sampleRate });
-  const audioBuffer = await ctx.decodeAudioData(await wavBlob.arrayBuffer());
+  const rawAudioBuffer = await ctx.decodeAudioData(await rawWavBlob.arrayBuffer());
   await ctx.close().catch(() => undefined);
 
-  const duration = metrics.audioDuration || audioBuffer.duration;
+  // Keep Pocket TTS voice cloning untouched. Apply the existing project
+  // speed/pitch controls only after neural synthesis with LPC formant preservation.
+  const audioBuffer = await applyVoicePitchAndSpeed(rawAudioBuffer, options.pitch, options.speed);
+  const wavBlob = audioBufferToWavBlob(audioBuffer);
+  const duration = audioBuffer.duration;
   const clip: AudioClip = {
     id: `clip_pocket_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     title: `Pocket Clone — ${voice.name}`,
