@@ -33,6 +33,7 @@ export default function App() {
   const [currentClip, setCurrentClip] = useState<AudioClip | null>(null);
   const [currentPlaylist, setCurrentPlaylist] = useState<ProjectPlaylist | null>(null);
   const [clonedVoices, setClonedVoices] = useState<ClonedVoiceProfile[]>([]);
+  const [selectedVoiceForTTS, setSelectedVoiceForTTS] = useState<ClonedVoiceProfile | null>(null);
   const [devices, setDevices] = useState<LinkedDevice[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
@@ -204,6 +205,7 @@ export default function App() {
 
   // Select Cloned Voice for TTS
   const handleSelectVoiceForTTS = (voice: ClonedVoiceProfile) => {
+    setSelectedVoiceForTTS(voice);
     setActiveTab('studio');
     notificationService.notify('Voice Selected', `Ready to synthesize with "${voice.name}".`, 'render_complete');
   };
@@ -397,6 +399,7 @@ export default function App() {
             <div className="lg:col-span-7 flex flex-col gap-6">
               <TTSStudio
                 clonedVoices={clonedVoices}
+                selectedVoiceForTTS={selectedVoiceForTTS}
                 onGenerate={handleGenerateSpeech}
                 onBulkComplete={handleBulkCompletePlaylist}
                 isGenerating={isGenerating}

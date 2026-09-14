@@ -42,6 +42,7 @@ import { ProjectPlaylistQueue } from './ProjectPlaylistQueue';
 
 interface TTSStudioProps {
   clonedVoices: ClonedVoiceProfile[];
+  selectedVoiceForTTS?: ClonedVoiceProfile | null;
   onGenerate: (options: TTSGenerateOptions) => Promise<void>;
   onBulkComplete?: (playlist: ProjectPlaylist, masterClip: AudioClip, clips: AudioClip[]) => void;
   isGenerating: boolean;
@@ -79,6 +80,7 @@ const SAMPLE_SCRIPTS = [
 
 export const TTSStudio: React.FC<TTSStudioProps> = ({
   clonedVoices,
+  selectedVoiceForTTS,
   onGenerate,
   onBulkComplete,
   isGenerating,
@@ -91,7 +93,9 @@ export const TTSStudio: React.FC<TTSStudioProps> = ({
   const [text, setText] = useState<string>(
     'Welcome to VoiceCraft AI. Convert any written text into natural, expressive speech with custom tones, multilingual mastery, and personal voice cloning.'
   );
-  const [selectedVoiceId, setSelectedVoiceId] = useState<string>(PREBUILT_VOICE_PROFILES[0].id);
+  const [selectedVoiceId, setSelectedVoiceId] = useState<string>(
+    selectedVoiceForTTS?.id || PREBUILT_VOICE_PROFILES[0].id
+  );
   const [selectedTone, setSelectedTone] = useState<ToneType>('calm');
   const [selectedLanguage, setSelectedLanguage] = useState<SupportedLanguage>('en-US');
   const [speed, setSpeed] = useState<number>(1.0);
