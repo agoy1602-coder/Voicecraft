@@ -1,4 +1,7 @@
 import { PocketTTS, chunksToWavBlob } from 'pocket-tts-js';
+import { processOffline } from '@soundtouchjs/formant-correction-worklet';
+import processorUrl from '@soundtouchjs/formant-correction-worklet/processor?url';
+import { pcmToWavBlob } from './audioExport';
 import type { ClonedVoiceProfile, AudioClip, AudioSentence } from '../types';
 import type { TTSGenerateOptions, TTSResult } from './ttsService';
 import { ttsService } from './ttsService';
@@ -277,12 +280,39 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
   );
   if (!chunks.length) throw new Error('Pocket TTS returned no audio for the cloned voice.');
 
-  const wavBlob = chunksToWavBlob(chunks, tts.sampleRate);
+  const originalWavBlob = chunksToWavBlob(chunks, tts.sampleRate);
   const ctx = new AudioContext({ sampleRate: tts.sampleRate });
-  const audioBuffer = await ctx.decodeAudioData(await wavBlob.arrayBuffer());
+  const originalAudioBuffer = await ctx.decodeAudioData(await originalWavBlob.arrayBuffer());
   await ctx.close().catch(() => undefined);
 
-  const duration = metrics.audioDuration || audioBuffer.duration;
+  // Pocket TTS owns voice identity; speed/pitch are applied only after local
+  // generation so the cloned reference and model conditioning remain intact.
+  // The UI stores pitch as a multiplier (1.0 = original), while SoundTouch
+  // accepts pitch in semitones. Formant correction keeps vocal timbre natural.
+  const pitchSemitones = options.pitch > 0 ? 12 * Math.log2(options.pitch) : 0;
+  const needsVoiceProcessing = Math.abs(options.speed - 1) > 0.001 || Math.abs(pitchSemitones) > 0.01;
+  let audioBuffer = originalAudioBuffer;
+  let wavBlob = originalWavBlob;
+
+  if (needsVoiceProcessing) {
+    audioBuffer = await processOffline({
+      input: originalAudioBuffer,
+      processorUrl,
+      playbackRate: options.speed,
+      pitchSemitones,
+      formantStrength: 1,
+    });
+
+    const channel = audioBuffer.getChannelData(0);
+    const pcm16 = new Int16Array(channel.length);
+    for (let i = 0; i < channel.length; i++) {
+      const sample = Math.max(-1, Math.min(1, channel[i]));
+      pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+    }
+    wavBlob = pcmToWavBlob(pcm16, audioBuffer.sampleRate, 1);
+  }
+
+  const duration = audioBuffer.duration || metrics.audioDuration;
   const clip: AudioClip = {
     id: `clip_pocket_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     title: `Pocket Clone — ${voice.name}`,
