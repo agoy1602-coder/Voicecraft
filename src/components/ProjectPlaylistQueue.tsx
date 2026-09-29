@@ -120,7 +120,7 @@ const SAMPLE_PROJECT_TEMPLATES = [
       },
       {
         title: 'Slide 3: Next Horizons',
-        text: 'With multi-language support across fourteen global dialects and rapid voice cloning, VoiceCraft establishes a new paradigm for vocal computing.',
+        text: 'With multi-language support across fourteen global dialects and rapid voice cloning, CloneVoice TTS provides a focused workspace for voice cloning and speech generation.',
         voiceId: 'voice_kore',
         tone: 'calm' as ToneType,
       },
@@ -573,7 +573,7 @@ export const ProjectPlaylistQueue: React.FC<ProjectPlaylistQueueProps> = ({
             </button>
           </div>
           <p className="text-[11px] text-slate-400">
-            Paste an article, script, or chapter below. VoiceCraft will partition it into clean, distinct queued blocks.
+            Paste an article, script, or chapter below. CloneVoice TTS will partition it into clean, distinct queued blocks.
           </p>
           <textarea
             value={rawTextToSplit}

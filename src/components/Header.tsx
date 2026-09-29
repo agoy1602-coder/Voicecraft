@@ -55,7 +55,7 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-bold text-lg text-slate-100 tracking-tight">VoiceCraft</span>
+                <span className="font-bold text-lg text-slate-100 tracking-tight">CloneVoice TTS</span>
                 <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded-full bg-gradient-to-r from-violet-500/20 to-indigo-500/20 text-violet-300 border border-violet-500/30">
                   AI Studio
                 </span>

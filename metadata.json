@@ -1,5 +1,5 @@
 {
-  "name": "VoiceCraft AI - Text to Speech & Voice Cloning Studio",
+  "name": "CloneVoice TTS - Free Voice Cloning & Text to Speech",
   "description": "High-fidelity multilingual text-to-speech converter and voice cloning studio featuring customizable tone profiles, offline mode, multi-format audio export, end-to-end encryption, real-time cloud sync, and low-latency playback.",
   "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

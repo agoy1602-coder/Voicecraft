@@ -261,7 +261,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             <p className="text-xs text-slate-400 leading-relaxed">
-              VoiceCraft AI captures real vocal acoustics to personalize voice cloning models and pitch extraction. Ensure native microphone permission is enabled in your browser.
+              CloneVoice TTS captures real vocal acoustics to personalize voice cloning models and pitch extraction. Ensure native microphone permission is enabled in your browser.
             </p>
 
             {/* Test Hardware Box */}
