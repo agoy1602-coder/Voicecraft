@@ -9,7 +9,8 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.cjs",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:account-vault-crypto": "tsx scripts/test-account-vault-crypto.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
