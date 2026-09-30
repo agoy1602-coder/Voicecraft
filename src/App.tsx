@@ -19,7 +19,7 @@ import {
   AppNotification,
   ProjectPlaylist,
 } from './types';
-import { DEFAULT_SETTINGS, storageService } from './services/storage';
+import { DEFAULT_SETTINGS, MAX_AUDIO_CLIPS, storageService } from './services/storage';
 import { ttsService, TTSGenerateOptions } from './services/ttsService';
 import { syncService } from './services/syncService';
 import { notificationService } from './services/notificationService';
@@ -142,7 +142,9 @@ export default function App() {
       const newClip = result.clip;
 
       // Update clips state and persist directly to IndexedDB
-      const updatedClips = [newClip, ...clips];
+      const updatedClips = [newClip, ...clips]
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+        .slice(0, MAX_AUDIO_CLIPS);
       setClips(updatedClips);
       setCurrentClip(newClip);
       await storageService.saveAudioClips(updatedClips);
@@ -172,7 +174,9 @@ export default function App() {
         syncService.triggerFullSync(
           updatedClips,
           clonedVoices,
-          (sc) => setClips(sc),
+          (sc) => setClips(
+            [...sc].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, MAX_AUDIO_CLIPS)
+          ),
           (sv) => setClonedVoices(sv)
         );
       }
@@ -237,7 +241,9 @@ export default function App() {
     synthesizedClips: AudioClip[]
   ) => {
     // Merge synthesized individual clips and master clip into library clips
-    const newClips = [masterClip, ...synthesizedClips, ...clips];
+    const newClips = [masterClip, ...synthesizedClips, ...clips]
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .slice(0, MAX_AUDIO_CLIPS);
     setClips(newClips);
     await storageService.saveAudioClips(newClips);
 
@@ -278,7 +284,9 @@ export default function App() {
     const res = await syncService.triggerFullSync(
       clips,
       clonedVoices,
-      (sc) => setClips(sc),
+      (sc) => setClips(
+        [...sc].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, MAX_AUDIO_CLIPS)
+      ),
       (sv) => setClonedVoices(sv)
     );
     setIsSyncing(false);
