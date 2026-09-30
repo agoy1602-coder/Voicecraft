@@ -24,6 +24,7 @@ import { ttsService, TTSGenerateOptions } from './services/ttsService';
 import { syncService } from './services/syncService';
 import { notificationService } from './services/notificationService';
 import { cryptoService } from './services/crypto';
+import { AccountVaultModal } from './components/AccountVaultModal';
 
 export default function App() {
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
@@ -51,6 +52,7 @@ export default function App() {
   const [isFeedbackOpen, setIsFeedbackOpen] = useState<boolean>(false);
   const [isNotifsOpen, setIsNotifsOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [isAccountVaultOpen, setIsAccountVaultOpen] = useState<boolean>(false);
   const [exportModalClip, setExportModalClip] = useState<AudioClip | null>(null);
 
   // Initialize App Data & Encryption
@@ -483,6 +485,18 @@ export default function App() {
       </main>
 
       {/* Global Modals */}
+      <AccountVaultModal
+        isOpen={isAccountVaultOpen}
+        onClose={() => setIsAccountVaultOpen(false)}
+        voices={clonedVoices}
+        clips={clips}
+        onRestored={(voices, restoredClips) => {
+          setClonedVoices(voices);
+          setClips(restoredClips);
+          setCurrentClip(restoredClips[0] || null);
+        }}
+      />
+
       <E2EESecurityModal
         isOpen={isE2EEOpen}
         onClose={() => setIsE2EEOpen(false)}
