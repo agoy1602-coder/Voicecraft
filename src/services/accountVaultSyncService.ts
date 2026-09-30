@@ -154,12 +154,18 @@ export async function syncAccountVault(
 
   for (const voice of localVoices) voiceMap.set(voice.id, voice);
   for (const voice of pulled.voices) {
-    if (!voiceMap.has(voice.id)) voiceMap.set(voice.id, voice);
+    const local = voiceMap.get(voice.id);
+    if (!local || (voice.createdAt || 0) > (local.createdAt || 0)) {
+      voiceMap.set(voice.id, voice);
+    }
   }
 
   for (const clip of localClips) clipMap.set(clip.id, clip);
   for (const clip of pulled.clips) {
-    if (!clipMap.has(clip.id)) clipMap.set(clip.id, clip);
+    const local = clipMap.get(clip.id);
+    if (!local || (clip.createdAt || 0) > (local.createdAt || 0)) {
+      clipMap.set(clip.id, clip);
+    }
   }
 
   const mergedVoices = Array.from(voiceMap.values());
