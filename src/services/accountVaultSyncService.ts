@@ -56,9 +56,14 @@ export async function pushAccountVault(
 ): Promise<number> {
   const supabase = getSupabaseClient();
   const key = requireActiveVaultKey();
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError) throw userError;
+  if (!userData.user) throw new Error('A signed-in account is required for vault sync.');
 
+  const userId = userData.user.id;
   const rows = await Promise.all([
     ...voices.map(async (voice) => ({
+      user_id: userId,
       record_id: voice.id,
       record_type: 'voice_profile' as const,
       encrypted_payload: await encryptPayload(voice, key),
@@ -67,6 +72,7 @@ export async function pushAccountVault(
       deleted_at: null,
     })),
     ...clips.map(async (clip) => ({
+      user_id: userId,
       record_id: clip.id,
       record_type: 'audio' as const,
       encrypted_payload: await encryptPayload({ ...clip, audioBlobUrl: '' }, key),
