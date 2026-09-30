@@ -1,5 +1,3 @@
-import type { CryptoKey } from './vaultKeyService';
-
 let activeVaultKey: CryptoKey | null = null;
 
 export function setActiveVaultKey(vaultKey: CryptoKey): void {
