@@ -1,6 +1,7 @@
 import { AudioClip, ClonedVoiceProfile } from '../types';
 import { storageService } from './storage';
 import { saveWrappedVaultKey } from './accountService';
+import { setActiveVaultKey } from './vaultSession';
 import {
   createVaultKey,
   verifyVaultKey,
@@ -50,6 +51,11 @@ export async function migrateLocalVaultToAccount(
   // never leaves this browser context.
   const wrappedVaultKey = await wrapVaultKey(vaultKey, recoverySecret);
   await saveWrappedVaultKey(wrappedVaultKey);
+
+  // Keep the newly created key active for the remainder of this signed-in session,
+  // so the first account sync can immediately encrypt records without requiring a
+  // second recovery step. The raw key remains memory-only.
+  setActiveVaultKey(vaultKey);
 
   return {
     voiceCount: voices.length,
