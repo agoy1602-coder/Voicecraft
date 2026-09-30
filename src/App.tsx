@@ -36,6 +36,7 @@ export default function App() {
   const [selectedVoiceForTTS, setSelectedVoiceForTTS] = useState<ClonedVoiceProfile | null>(null);
   const [devices, setDevices] = useState<LinkedDevice[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [isAppInitialized, setIsAppInitialized] = useState<boolean>(false);
 
   // State flags
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
@@ -79,6 +80,10 @@ export default function App() {
       setDevices(linked);
 
       setLastSyncedAt(storageService.getLastSyncTime());
+      // Do not allow auto-sync to run with the initial empty React state.
+      // On a fresh page load, that could push [] before IndexedDB finishes loading
+      // and overwrite the user's persisted clones/audio.
+      setIsAppInitialized(true);
     }
 
     initApp();
@@ -110,7 +115,7 @@ export default function App() {
 
   // Background Auto-Sync Trigger
   useEffect(() => {
-    if (settings.autoCloudSync && isOnline) {
+    if (isAppInitialized && settings.autoCloudSync && isOnline) {
       syncService.startAutoSync(
         () => clips,
         () => clonedVoices,
@@ -125,7 +130,7 @@ export default function App() {
     return () => {
       syncService.stopAutoSync();
     };
-  }, [settings.autoCloudSync, isOnline, clips, clonedVoices]);
+  }, [isAppInitialized, settings.autoCloudSync, isOnline, clips, clonedVoices]);
 
   // Handle Speech Generation
   const handleGenerateSpeech = async (options: TTSGenerateOptions) => {
