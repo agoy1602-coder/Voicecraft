@@ -27,6 +27,8 @@ const REQUIRED_ORT_FILES = [
 
 let engine: PocketTTS | null = null;
 let enginePromise: Promise<PocketTTS> | null = null;
+let loadingEngine: PocketTTS | null = null;
+let hiddenAtWhileLoading: number | null = null;
 const activeVoiceRefs = new Map<string, string>();
 
 type PocketProgress = {
@@ -136,30 +138,42 @@ async function cacheSameOriginOrtAssets(): Promise<void> {
   }
 }
 
+function abortPendingEngineLoad(): void {
+  if (loadingEngine) {
+    loadingEngine.destroy();
+    loadingEngine = null;
+  }
+  enginePromise = null;
+}
+
 async function getEngine(onProgress?: (progress: PocketProgress) => void): Promise<PocketTTS> {
   if (engine) return engine;
   if (enginePromise) return enginePromise;
+  const instance = new PocketTTS({
+    language: 'english_2026-04',
+    quantized: true,
+    voiceCloning: true,
+    cache: true,
+    cacheName: CACHE_NAME,
+    maxThreads: 1,
+    ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
+  });
+  loadingEngine = instance;
   enginePromise = (async () => {
-    const instance = new PocketTTS({
-      language: 'english_2026-04',
-      quantized: true,
-      voiceCloning: true,
-      cache: true,
-      cacheName: CACHE_NAME,
-      maxThreads: 1,
-      ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
-    });
     await withTimeout(
       instance.load((progress: PocketProgress) => onProgress?.(progress)),
       ENGINE_LOAD_TIMEOUT_MS,
       'Pocket TTS model preparation timed out. Check your connection and available browser storage, then try again.',
     );
     engine = instance;
+    loadingEngine = null;
     return instance;
   })();
   try {
     return await enginePromise;
   } catch (error) {
+    if (loadingEngine === instance) loadingEngine = null;
+    instance.destroy();
     enginePromise = null;
     engine = null;
     throw error;
@@ -190,6 +204,28 @@ export async function preparePocketTtsOffline(
     );
   }
   return status;
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (enginePromise && !engine && hiddenAtWhileLoading === null) {
+        hiddenAtWhileLoading = Date.now();
+      }
+      return;
+    }
+    if (hiddenAtWhileLoading !== null) {
+      const hiddenDuration = Date.now() - hiddenAtWhileLoading;
+      hiddenAtWhileLoading = null;
+      // Android/Chrome may suspend a large Web Worker download while its tab is
+      // backgrounded. If that happened, do not leave the old Promise/worker
+      // blocking the Retry button forever. A short background visit is allowed
+      // to continue; longer backgrounding gets a clean worker on return.
+      if (hiddenDuration >= 2000 && enginePromise && !engine) {
+        abortPendingEngineLoad();
+      }
+    }
+  });
 }
 
 async function decodeReference(blob: Blob): Promise<{ audio: Float32Array; sampleRate: number; duration: number }> {
