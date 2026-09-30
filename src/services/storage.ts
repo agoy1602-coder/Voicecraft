@@ -30,6 +30,7 @@ const DB_VERSION = 1;
 const STORE_CLIPS = 'audio_clips';
 const STORE_VOICES = 'cloned_voices';
 const STORE_KV = 'kv_store';
+export const MAX_AUDIO_CLIPS = 5;
 
 class StorageService {
   private dbPromise: Promise<IDBDatabase> | null = null;
@@ -251,8 +252,9 @@ class StorageService {
 
           // Sort by creation time newest first
           clips.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-          this.memoryClipsCache = clips;
-          resolve(clips);
+          const retainedClips = clips.slice(0, MAX_AUDIO_CLIPS);
+          this.memoryClipsCache = retainedClips;
+          resolve(retainedClips);
         };
 
         req.onerror = () => {
@@ -265,31 +267,43 @@ class StorageService {
   }
 
   async saveAudioClips(clips: AudioClip[]): Promise<void> {
-    this.memoryClipsCache = clips;
-    try {
-      const db = await this.initDatabase();
-      const tx = db.transaction(STORE_CLIPS, 'readwrite');
-      const store = tx.objectStore(STORE_CLIPS);
+    const retainedClips = [...clips]
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .slice(0, MAX_AUDIO_CLIPS);
+    this.memoryClipsCache = retainedClips;
 
-      // Clear old and put all clips
-      store.clear();
-      for (const clip of clips) {
+    // Encrypt before opening the IndexedDB write transaction. Awaiting crypto
+    // work inside an active transaction can cause the transaction to become
+    // inactive before store.put(), which made generated clips disappear on refresh.
+    const encryptedRecords = await Promise.all(
+      retainedClips.map(async (clip) => {
         const serializableClip: AudioClip = {
           ...clip,
-          audioBlobUrl: '', // Will rehydrate
+          audioBlobUrl: '', // Rehydrate from audioBase64 after reload
         };
         const encrypted = await cryptoService.encrypt(serializableClip);
-        store.put({
+        return {
           id: clip.id,
           encryptedData: JSON.stringify(encrypted),
           createdAt: clip.createdAt,
           title: clip.title,
-          audioBase64: clip.audioBase64, // Keep base64 for fast retrieval
-        });
+          audioBase64: clip.audioBase64,
+        };
+      })
+    );
+
+    const db = await this.initDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_CLIPS, 'readwrite');
+      const store = tx.objectStore(STORE_CLIPS);
+      store.clear();
+      for (const record of encryptedRecords) {
+        store.put(record);
       }
-    } catch {
-      // Storage write complete
-    }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('Audio Library storage transaction failed'));
+      tx.onabort = () => reject(tx.error || new Error('Audio Library storage transaction aborted'));
+    });
   }
 
   async saveSingleClip(clip: AudioClip): Promise<void> {
@@ -462,4 +476,3 @@ class StorageService {
 }
 
 export const storageService = new StorageService();
-
