@@ -24,6 +24,7 @@ import { ttsService, TTSGenerateOptions } from './services/ttsService';
 import { syncService } from './services/syncService';
 import { notificationService } from './services/notificationService';
 import { cryptoService } from './services/crypto';
+import { AccountVaultModal } from './components/AccountVaultModal';
 
 export default function App() {
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
@@ -50,6 +51,7 @@ export default function App() {
   const [isFeedbackOpen, setIsFeedbackOpen] = useState<boolean>(false);
   const [isNotifsOpen, setIsNotifsOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [isAccountVaultOpen, setIsAccountVaultOpen] = useState<boolean>(false);
   const [exportModalClip, setExportModalClip] = useState<AudioClip | null>(null);
 
   // Initialize App Data & Encryption
@@ -373,6 +375,15 @@ export default function App() {
         onChangeTab={setActiveTab}
       />
 
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+        <button
+          onClick={() => setIsAccountVaultOpen(true)}
+          className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-300 hover:bg-violet-500/20"
+        >
+          Account Vault
+        </button>
+      </div>
+
       {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
         {/* Offline Banner Indicator if disconnected */}
@@ -470,6 +481,18 @@ export default function App() {
       </main>
 
       {/* Global Modals */}
+      <AccountVaultModal
+        isOpen={isAccountVaultOpen}
+        onClose={() => setIsAccountVaultOpen(false)}
+        voices={clonedVoices}
+        clips={clips}
+        onRestored={(voices, restoredClips) => {
+          setClonedVoices(voices);
+          setClips(restoredClips);
+          setCurrentClip(restoredClips[0] || null);
+        }}
+      />
+
       <E2EESecurityModal
         isOpen={isE2EEOpen}
         onClose={() => setIsE2EEOpen(false)}
