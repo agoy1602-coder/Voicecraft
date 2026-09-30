@@ -134,6 +134,17 @@ export async function pushAccountVault(
       if (uploadError) throw uploadError;
     }
 
+    if (!storagePath) {
+      const { data: existingRecord, error: existingError } = await supabase
+        .from('sync_records')
+        .select('storage_path')
+        .eq('record_id', clip.id)
+        .eq('record_type', 'audio')
+        .maybeSingle();
+      if (existingError) throw existingError;
+      storagePath = existingRecord?.storage_path ?? null;
+    }
+
     const metadataOnlyClip = { ...clip, audioBase64: undefined, audioBlobUrl: '' };
     audioRows.push({
       user_id: userId,
@@ -194,23 +205,27 @@ export async function pullAccountVault(): Promise<{
       clip.synced = true;
 
       if (row.storage_path) {
-        const { data: encryptedFile, error: downloadError } = await supabase.storage
-          .from('vault-audio')
-          .download(row.storage_path);
+        try {
+          const { data: encryptedFile, error: downloadError } = await supabase.storage
+            .from('vault-audio')
+            .download(row.storage_path);
 
-        if (downloadError) throw downloadError;
-
-        const encryptedBytes = new Uint8Array(await encryptedFile.arrayBuffer());
-        const decryptedAudio = await decryptBytes(toBase64(encryptedBytes), key);
-        clip.audioBase64 = toBase64(decryptedAudio);
-        clip.audioBlobUrl = URL.createObjectURL(
-          audioBlobFromBytes(decryptedAudio, clip.format || 'audio/wav')
-        );
+          if (!downloadError) {
+            const encryptedBytes = new Uint8Array(await encryptedFile.arrayBuffer());
+            const decryptedAudio = await decryptBytes(toBase64(encryptedBytes), key);
+            clip.audioBase64 = toBase64(decryptedAudio);
+            clip.audioBlobUrl = URL.createObjectURL(
+              audioBlobFromBytes(decryptedAudio, clip.format || 'audio/wav')
+            );
+          }
+        } catch {
+          // Preserve metadata even if the encrypted blob is temporarily unavailable.
+        }
       }
 
       clips.push(clip);
     } catch {
-      // Keep undecryptable/inaccessible records server-side; never turn them into local deletions.
+      // Keep undecryptable metadata records server-side; never turn them into local deletions.
     }
   }
 
