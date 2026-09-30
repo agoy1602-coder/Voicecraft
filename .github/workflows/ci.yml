@@ -25,3 +25,5 @@ jobs:
         run: npm run lint
       - name: Production build
         run: npm run build
+      - name: Account vault crypto test
+        run: npm run test:account-vault-crypto
