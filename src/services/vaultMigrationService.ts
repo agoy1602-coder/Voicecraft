@@ -31,6 +31,10 @@ export async function migrateLocalVaultToAccount(
     storageService.loadAudioClips(),
   ]);
 
+  if (voices.length === 0 && clips.length === 0) {
+    throw new Error('Local vault migration stopped because no existing clone or audio data was recovered.');
+  }
+
   const vaultKey = await createVaultKey();
   await verifyVaultKey(vaultKey);
 
