@@ -39,68 +39,34 @@ class SyncService {
     const userId = 'user_default';
 
     try {
-      // 1. Prepare Encrypted Records for Push
-      const recordsToPush: any[] = [];
+      /*
+       * IMPORTANT DATA-SAFETY RULE:
+       * An empty local array is not proof that the user deleted everything.
+       * It can mean a fresh browser, delayed IndexedDB initialization, a
+       * storage failure, or a decryption failure. Therefore we PULL first,
+       * merge, and only then PUSH. Never send an empty state as a destructive
+       * synchronization instruction.
+       */
 
-      // Encrypt clips
-      for (const clip of clips) {
-        const serializableClip = { ...clip, audioBlobUrl: '' };
-        const encrypted = await cryptoService.encrypt(serializableClip);
-        recordsToPush.push({
-          id: clip.id,
-          userId,
-          deviceId,
-          recordType: 'audio',
-          encryptedData: JSON.stringify(encrypted),
-          checksum: encrypted.checksum,
-          version: 1,
-          updatedAt: clip.createdAt,
-        });
-      }
-
-      // Encrypt cloned voices
-      for (const voice of voices) {
-        const encrypted = await cryptoService.encrypt(voice);
-        recordsToPush.push({
-          id: voice.id,
-          userId,
-          deviceId,
-          recordType: 'voice_profile',
-          encryptedData: JSON.stringify(encrypted),
-          checksum: encrypted.checksum,
-          version: 1,
-          updatedAt: voice.createdAt,
-        });
-      }
-
-      // Push to Server
-      const pushRes = await fetch('/api/sync/push', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          deviceId,
-          records: recordsToPush,
-        }),
-      });
-
-      const pushData = await pushRes.json();
-
-      // Pull Remote Updates
-      const lastSyncTime = storageService.getLastSyncTime();
+      // 1. Pull remote records first so a fresh browser can recover existing data
+      // before it has any opportunity to publish its initial empty React state.
       const pullRes = await fetch('/api/sync/pull', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,
-          sinceTimestamp: 0, // pull all to ensure consistency
+          sinceTimestamp: 0,
         }),
       });
 
-      const pullData = await pullRes.json();
-      const remoteRecords: any[] = pullData.records || [];
+      if (!pullRes.ok) {
+        throw new Error(`Sync pull failed (HTTP ${pullRes.status})`);
+      }
 
-      // Decrypt incoming records
+      const pullData = await pullRes.json();
+      const remoteRecords: any[] = Array.isArray(pullData.records) ? pullData.records : [];
+
+      // 2. Decrypt remote records.
       const pulledClips: AudioClip[] = [];
       const pulledVoices: ClonedVoiceProfile[] = [];
 
@@ -113,16 +79,17 @@ class SyncService {
             pulledVoices.push(decrypted);
           }
         } catch {
-          // Record decryption skipped
+          // Do not turn an undecryptable remote record into a deletion.
         }
       }
 
-      // Merge clips (deduplicating by ID)
+      // 3. Merge local + remote. Local records are retained; remote records
+      // fill gaps. This is intentionally non-destructive.
       const mergedClipsMap = new Map<string, AudioClip>();
       clips.forEach((c) => mergedClipsMap.set(c.id, c));
+
       pulledClips.forEach((c) => {
         if (!mergedClipsMap.has(c.id)) {
-          // Rehydrate blob url if base64 available
           if (c.audioBase64) {
             try {
               const bin = atob(c.audioBase64);
@@ -145,18 +112,75 @@ class SyncService {
         }
       });
 
-      const finalClips = Array.from(mergedClipsMap.values());
+      const finalClips = Array.from(mergedClipsMap.values())
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+        .slice(0, 5);
       const finalVoices = Array.from(mergedVoicesMap.values());
+
+      // If both sides are empty, stop. An empty merge is never written as a
+      // successful synchronization result because it could represent missing
+      // data rather than an intentional user deletion.
+      if (finalClips.length === 0 && finalVoices.length === 0) {
+        throw new Error('Sync returned no recoverable user records; local data was not overwritten.');
+      }
+
+      // 4. Persist the recovered/merged state locally before publishing it.
+      await storageService.saveAudioClips(finalClips);
+      await storageService.saveClonedVoices(finalVoices);
 
       if (onSyncedClips) onSyncedClips(finalClips);
       if (onSyncedVoices) onSyncedVoices(finalVoices);
 
+      // 5. Push the merged state, never the potentially-empty initial local state.
+      const recordsToPush: any[] = [];
+
+      for (const clip of finalClips) {
+        const serializableClip = { ...clip, audioBlobUrl: '' };
+        const encrypted = await cryptoService.encrypt(serializableClip);
+        recordsToPush.push({
+          id: clip.id,
+          userId,
+          deviceId,
+          recordType: 'audio',
+          encryptedData: JSON.stringify(encrypted),
+          checksum: encrypted.checksum,
+          version: 1,
+          updatedAt: clip.createdAt,
+        });
+      }
+
+      for (const voice of finalVoices) {
+        const encrypted = await cryptoService.encrypt(voice);
+        recordsToPush.push({
+          id: voice.id,
+          userId,
+          deviceId,
+          recordType: 'voice_profile',
+          encryptedData: JSON.stringify(encrypted),
+          checksum: encrypted.checksum,
+          version: 1,
+          updatedAt: voice.createdAt,
+        });
+      }
+
+      const pushRes = await fetch('/api/sync/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          deviceId,
+          records: recordsToPush,
+        }),
+      });
+
+      if (!pushRes.ok) {
+        throw new Error(`Sync push failed (HTTP ${pushRes.status})`);
+      }
+
+      const pushData = await pushRes.json();
       const now = Date.now();
       storageService.setLastSyncTime(now);
-      await storageService.saveAudioClips(finalClips);
-      await storageService.saveClonedVoices(finalVoices);
 
-      // Fetch linked devices
       const devices = await this.getLinkedDevices();
 
       this.isSyncing = false;
@@ -164,7 +188,7 @@ class SyncService {
         isSyncing: false,
         lastSyncedAt: now,
         syncedCount: recordsToPush.length,
-        serverTotal: pushData.serverTotalCount || finalClips.length,
+        serverTotal: pushData.serverTotalCount || finalClips.length + finalVoices.length,
         e2eeActive: true,
         activeDevicesCount: devices.length,
         error: null,
@@ -175,10 +199,10 @@ class SyncService {
         isSyncing: false,
         lastSyncedAt: storageService.getLastSyncTime(),
         syncedCount: 0,
-        serverTotal: clips.length,
+        serverTotal: clips.length + voices.length,
         e2eeActive: true,
         activeDevicesCount: 1,
-        error: err.message || 'Sync failed',
+        error: err.message || 'Sync failed; existing local data was preserved',
       };
     }
   }

@@ -1,4 +1,6 @@
 import { PocketTTS, chunksToWavBlob } from 'pocket-tts-js';
+import { processOffline } from '@soundtouchjs/formant-correction-worklet';
+import processorUrl from '@soundtouchjs/formant-correction-worklet/processor?url';
 import type { ClonedVoiceProfile, AudioClip, AudioSentence } from '../types';
 import type { TTSGenerateOptions, TTSResult } from './ttsService';
 import { ttsService } from './ttsService';
@@ -25,6 +27,9 @@ const REQUIRED_ORT_FILES = [
 
 let engine: PocketTTS | null = null;
 let enginePromise: Promise<PocketTTS> | null = null;
+let loadingEngine: PocketTTS | null = null;
+let abortLoadingPromise: (() => void) | null = null;
+let hiddenAtWhileLoading: number | null = null;
 const activeVoiceRefs = new Map<string, string>();
 
 type PocketProgress = {
@@ -134,30 +139,56 @@ async function cacheSameOriginOrtAssets(): Promise<void> {
   }
 }
 
+function abortPendingEngineLoad(): void {
+  if (abortLoadingPromise) {
+    abortLoadingPromise();
+    abortLoadingPromise = null;
+  }
+  if (loadingEngine) {
+    loadingEngine.destroy();
+    loadingEngine = null;
+  }
+  enginePromise = null;
+}
+
 async function getEngine(onProgress?: (progress: PocketProgress) => void): Promise<PocketTTS> {
   if (engine) return engine;
   if (enginePromise) return enginePromise;
+  const instance = new PocketTTS({
+    language: 'english_2026-04',
+    quantized: true,
+    voiceCloning: true,
+    cache: true,
+    cacheName: CACHE_NAME,
+    maxThreads: 1,
+    ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
+  });
+  loadingEngine = instance;
   enginePromise = (async () => {
-    const instance = new PocketTTS({
-      language: 'english_2026-04',
-      quantized: true,
-      voiceCloning: true,
-      cache: true,
-      cacheName: CACHE_NAME,
-      maxThreads: 1,
-      ortBaseUrl: `${import.meta.env.BASE_URL}ort/`,
-    });
-    await withTimeout(
+    const loadPromise = withTimeout(
       instance.load((progress: PocketProgress) => onProgress?.(progress)),
       ENGINE_LOAD_TIMEOUT_MS,
       'Pocket TTS model preparation timed out. Check your connection and available browser storage, then try again.',
     );
-    engine = instance;
-    return instance;
+    const abortPromise = new Promise<never>((_, reject) => {
+      abortLoadingPromise = () => {
+        reject(new Error('Pocket TTS model preparation was interrupted while the browser tab was in the background. Please press Prepare Offline Voice Engine again.'));
+      };
+    });
+    try {
+      await Promise.race([loadPromise, abortPromise]);
+      engine = instance;
+      loadingEngine = null;
+      return instance;
+    } finally {
+      abortLoadingPromise = null;
+    }
   })();
   try {
     return await enginePromise;
   } catch (error) {
+    if (loadingEngine === instance) loadingEngine = null;
+    instance.destroy();
     enginePromise = null;
     engine = null;
     throw error;
@@ -188,6 +219,28 @@ export async function preparePocketTtsOffline(
     );
   }
   return status;
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (enginePromise && !engine && hiddenAtWhileLoading === null) {
+        hiddenAtWhileLoading = Date.now();
+      }
+      return;
+    }
+    if (hiddenAtWhileLoading !== null) {
+      const hiddenDuration = Date.now() - hiddenAtWhileLoading;
+      hiddenAtWhileLoading = null;
+      // Android/Chrome may suspend a large Web Worker download while its tab is
+      // backgrounded. If that happened, do not leave the old Promise/worker
+      // blocking the Retry button forever. A short background visit is allowed
+      // to continue; longer backgrounding gets a clean worker on return.
+      if (hiddenDuration >= 2000 && enginePromise && !engine) {
+        abortPendingEngineLoad();
+      }
+    }
+  });
 }
 
 async function decodeReference(blob: Blob): Promise<{ audio: Float32Array; sampleRate: number; duration: number }> {
@@ -246,6 +299,49 @@ function sentenceTimings(text: string, duration: number): AudioSentence[] {
   });
 }
 
+function audioBufferToWavBlob(audioBuffer: AudioBuffer): Blob {
+  const channel = audioBuffer.getChannelData(0);
+  const pcm16 = new Int16Array(channel.length);
+  for (let i = 0; i < channel.length; i++) {
+    const sample = Math.max(-1, Math.min(1, channel[i]));
+    pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+  const buffer = new ArrayBuffer(44 + pcm16.length * 2);
+  const view = new DataView(buffer);
+  const write = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i));
+  };
+  write(0, 'RIFF');
+  view.setUint32(4, 36 + pcm16.length * 2, true);
+  write(8, 'WAVE');
+  write(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, audioBuffer.sampleRate, true);
+  view.setUint32(28, audioBuffer.sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  write(36, 'data');
+  view.setUint32(40, pcm16.length * 2, true);
+  for (let i = 0; i < pcm16.length; i++) view.setInt16(44 + i * 2, pcm16[i], true);
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+async function applyVoicePitchAndSpeed(audioBuffer: AudioBuffer, pitch: number, speed: number): Promise<AudioBuffer> {
+  const safePitch = Math.max(0.1, Math.min(8, Number.isFinite(pitch) && pitch > 0 ? pitch : 1));
+  const safeSpeed = Math.max(0.1, Math.min(8, Number.isFinite(speed) && speed > 0 ? speed : 1));
+  if (Math.abs(safePitch - 1) < 0.0001 && Math.abs(safeSpeed - 1) < 0.0001) return audioBuffer;
+  const pitchSemitones = Math.max(-24, Math.min(24, 12 * Math.log2(safePitch)));
+  return processOffline({
+    input: audioBuffer,
+    processorUrl,
+    pitchSemitones,
+    playbackRate: safeSpeed,
+    formantStrength: 1,
+  });
+}
+
 async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> {
   const start = performance.now();
   const voice = options.voice as ClonedVoiceProfile;
@@ -277,12 +373,16 @@ async function generateLocally(options: TTSGenerateOptions): Promise<TTSResult> 
   );
   if (!chunks.length) throw new Error('Pocket TTS returned no audio for the cloned voice.');
 
-  const wavBlob = chunksToWavBlob(chunks, tts.sampleRate);
+  const rawWavBlob = chunksToWavBlob(chunks, tts.sampleRate);
   const ctx = new AudioContext({ sampleRate: tts.sampleRate });
-  const audioBuffer = await ctx.decodeAudioData(await wavBlob.arrayBuffer());
+  const rawAudioBuffer = await ctx.decodeAudioData(await rawWavBlob.arrayBuffer());
   await ctx.close().catch(() => undefined);
 
-  const duration = metrics.audioDuration || audioBuffer.duration;
+  // Keep Pocket TTS voice cloning untouched. Apply the existing project
+  // speed/pitch controls only after neural synthesis with LPC formant preservation.
+  const audioBuffer = await applyVoicePitchAndSpeed(rawAudioBuffer, options.pitch, options.speed);
+  const wavBlob = audioBufferToWavBlob(audioBuffer);
+  const duration = audioBuffer.duration;
   const clip: AudioClip = {
     id: `clip_pocket_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     title: `Pocket Clone — ${voice.name}`,

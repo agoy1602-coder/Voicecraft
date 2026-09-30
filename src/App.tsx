@@ -19,11 +19,12 @@ import {
   AppNotification,
   ProjectPlaylist,
 } from './types';
-import { DEFAULT_SETTINGS, storageService } from './services/storage';
+import { DEFAULT_SETTINGS, MAX_AUDIO_CLIPS, storageService } from './services/storage';
 import { ttsService, TTSGenerateOptions } from './services/ttsService';
 import { syncService } from './services/syncService';
 import { notificationService } from './services/notificationService';
 import { cryptoService } from './services/crypto';
+import { AccountVaultModal } from './components/AccountVaultModal';
 
 export default function App() {
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
@@ -36,6 +37,7 @@ export default function App() {
   const [selectedVoiceForTTS, setSelectedVoiceForTTS] = useState<ClonedVoiceProfile | null>(null);
   const [devices, setDevices] = useState<LinkedDevice[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [isAppInitialized, setIsAppInitialized] = useState<boolean>(false);
 
   // State flags
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
@@ -50,6 +52,7 @@ export default function App() {
   const [isFeedbackOpen, setIsFeedbackOpen] = useState<boolean>(false);
   const [isNotifsOpen, setIsNotifsOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [isAccountVaultOpen, setIsAccountVaultOpen] = useState<boolean>(false);
   const [exportModalClip, setExportModalClip] = useState<AudioClip | null>(null);
 
   // Initialize App Data & Encryption
@@ -79,6 +82,10 @@ export default function App() {
       setDevices(linked);
 
       setLastSyncedAt(storageService.getLastSyncTime());
+      // Do not allow auto-sync to run with the initial empty React state.
+      // On a fresh page load, that could push [] before IndexedDB finishes loading
+      // and overwrite the user's persisted clones/audio.
+      setIsAppInitialized(true);
     }
 
     initApp();
@@ -110,7 +117,7 @@ export default function App() {
 
   // Background Auto-Sync Trigger
   useEffect(() => {
-    if (settings.autoCloudSync && isOnline) {
+    if (isAppInitialized && settings.autoCloudSync && isOnline) {
       syncService.startAutoSync(
         () => clips,
         () => clonedVoices,
@@ -125,7 +132,7 @@ export default function App() {
     return () => {
       syncService.stopAutoSync();
     };
-  }, [settings.autoCloudSync, isOnline, clips, clonedVoices]);
+  }, [isAppInitialized, settings.autoCloudSync, isOnline, clips, clonedVoices]);
 
   // Handle Speech Generation
   const handleGenerateSpeech = async (options: TTSGenerateOptions) => {
@@ -142,7 +149,9 @@ export default function App() {
       const newClip = result.clip;
 
       // Update clips state and persist directly to IndexedDB
-      const updatedClips = [newClip, ...clips];
+      const updatedClips = [newClip, ...clips]
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+        .slice(0, MAX_AUDIO_CLIPS);
       setClips(updatedClips);
       setCurrentClip(newClip);
       await storageService.saveAudioClips(updatedClips);
@@ -172,7 +181,9 @@ export default function App() {
         syncService.triggerFullSync(
           updatedClips,
           clonedVoices,
-          (sc) => setClips(sc),
+          (sc) => setClips(
+            [...sc].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, MAX_AUDIO_CLIPS)
+          ),
           (sv) => setClonedVoices(sv)
         );
       }
@@ -237,7 +248,9 @@ export default function App() {
     synthesizedClips: AudioClip[]
   ) => {
     // Merge synthesized individual clips and master clip into library clips
-    const newClips = [masterClip, ...synthesizedClips, ...clips];
+    const newClips = [masterClip, ...synthesizedClips, ...clips]
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .slice(0, MAX_AUDIO_CLIPS);
     setClips(newClips);
     await storageService.saveAudioClips(newClips);
 
@@ -278,7 +291,9 @@ export default function App() {
     const res = await syncService.triggerFullSync(
       clips,
       clonedVoices,
-      (sc) => setClips(sc),
+      (sc) => setClips(
+        [...sc].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, MAX_AUDIO_CLIPS)
+      ),
       (sv) => setClonedVoices(sv)
     );
     setIsSyncing(false);
@@ -372,6 +387,15 @@ export default function App() {
         activeTab={activeTab}
         onChangeTab={setActiveTab}
       />
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+        <button
+          onClick={() => setIsAccountVaultOpen(true)}
+          className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-300 hover:bg-violet-500/20"
+        >
+          Account Vault
+        </button>
+      </div>
 
       {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
@@ -470,6 +494,18 @@ export default function App() {
       </main>
 
       {/* Global Modals */}
+      <AccountVaultModal
+        isOpen={isAccountVaultOpen}
+        onClose={() => setIsAccountVaultOpen(false)}
+        voices={clonedVoices}
+        clips={clips}
+        onRestored={(voices, restoredClips) => {
+          setClonedVoices(voices);
+          setClips(restoredClips);
+          setCurrentClip(restoredClips[0] || null);
+        }}
+      />
+
       <E2EESecurityModal
         isOpen={isE2EEOpen}
         onClose={() => setIsE2EEOpen(false)}
