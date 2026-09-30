@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { getAccountState, onAuthStateChange, signInWithEmail, signOutAccount, signUpWithEmail } from '../services/accountService';
+import { getAccountState, isSupabaseConfigured, onAuthStateChange, signInWithEmail, signOutAccount, signUpWithEmail } from '../services/accountService';
 import { migrateLocalVaultToAccount } from '../services/vaultMigrationService';
 import { recoverAccountVault } from '../services/vaultRecoveryService';
 import { pullAccountVault, syncAccountVault } from '../services/accountVaultSyncService';
@@ -25,8 +25,24 @@ export function AccountVaultModal({ isOpen, onClose, voices, clips, onRestored }
 
   useEffect(() => {
     if (!isOpen) return;
-    getAccountState().then((state) => setSignedIn(Boolean(state.user))).catch((err) => setMessage(err?.message || 'Unable to read account state.'));
-    const unsubscribe = onAuthStateChange((state) => setSignedIn(Boolean(state.user)));
+
+    if (!isSupabaseConfigured()) {
+      setSignedIn(false);
+      setMessage('Account vault is not configured on this preview. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in the preview environment.');
+      return;
+    }
+
+    getAccountState()
+      .then((state) => setSignedIn(Boolean(state.user)))
+      .catch((err) => setMessage(err?.message || 'Unable to read account state.'));
+
+    let unsubscribe = () => {};
+    try {
+      unsubscribe = onAuthStateChange((state) => setSignedIn(Boolean(state.user)));
+    } catch (err: any) {
+      setMessage(err?.message || 'Unable to initialize account authentication.');
+    }
+
     return unsubscribe;
   }, [isOpen]);
 
