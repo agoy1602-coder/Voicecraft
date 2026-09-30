@@ -10,6 +10,7 @@ interface SyncRecordRow {
   version: number;
   updated_at: string;
   deleted_at: string | null;
+  storage_path: string | null;
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -20,8 +21,12 @@ function fromBase64(value: string): Uint8Array {
   return Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
 }
 
-async function encryptPayload(value: unknown, key: CryptoKey): Promise<string> {
+async function encryptJson(value: unknown, key: CryptoKey): Promise<string> {
   const plaintext = new TextEncoder().encode(JSON.stringify(value));
+  return encryptBytes(plaintext, key);
+}
+
+async function encryptBytes(plaintext: Uint8Array, key: CryptoKey): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
   const packed = new Uint8Array(iv.length + ciphertext.byteLength);
@@ -30,13 +35,37 @@ async function encryptPayload(value: unknown, key: CryptoKey): Promise<string> {
   return toBase64(packed);
 }
 
-async function decryptPayload<T>(payload: string, key: CryptoKey): Promise<T> {
+async function decryptJson<T>(payload: string, key: CryptoKey): Promise<T> {
+  const plaintext = await decryptBytes(payload, key);
+  return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+}
+
+async function decryptBytes(payload: string, key: CryptoKey): Promise<Uint8Array> {
   const packed = fromBase64(payload);
   if (packed.length <= 12) throw new Error('Invalid encrypted sync payload.');
   const iv = packed.slice(0, 12);
   const ciphertext = packed.slice(12);
   const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
-  return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+  return new Uint8Array(plaintext);
+}
+
+async function readClipAudioBytes(clip: AudioClip): Promise<Uint8Array | null> {
+  if (clip.audioBase64) return fromBase64(clip.audioBase64);
+
+  if (clip.audioBlobUrl && clip.audioBlobUrl.startsWith('blob:')) {
+    try {
+      const response = await fetch(clip.audioBlobUrl);
+      if (response.ok) return new Uint8Array(await response.arrayBuffer());
+    } catch {
+      // Fall through: the clip may be metadata-only.
+    }
+  }
+
+  return null;
+}
+
+function audioBlobFromBytes(bytes: Uint8Array, mimeType: string): Blob {
+  return new Blob([bytes], { type: mimeType || 'audio/wav' });
 }
 
 function recordUpdatedAt(value: number): string {
@@ -61,26 +90,64 @@ export async function pushAccountVault(
   if (!userData.user) throw new Error('A signed-in account is required for vault sync.');
 
   const userId = userData.user.id;
-  const rows = await Promise.all([
-    ...voices.map(async (voice) => ({
+
+  const voiceRows = await Promise.all(
+    voices.map(async (voice) => ({
       user_id: userId,
       record_id: voice.id,
       record_type: 'voice_profile' as const,
-      encrypted_payload: await encryptPayload(voice, key),
+      encrypted_payload: await encryptJson(voice, key),
       version: 1,
       updated_at: recordUpdatedAt(voice.createdAt),
       deleted_at: null,
-    })),
-    ...clips.map(async (clip) => ({
+      storage_path: null,
+    }))
+  );
+
+  const audioRows: Array<{
+    user_id: string;
+    record_id: string;
+    record_type: 'audio';
+    encrypted_payload: string;
+    version: number;
+    updated_at: string;
+    deleted_at: null;
+    storage_path: string | null;
+  }> = [];
+
+  for (const clip of clips) {
+    const audioBytes = await readClipAudioBytes(clip);
+    let storagePath: string | null = null;
+
+    if (audioBytes && audioBytes.length > 0) {
+      storagePath = `${userId}/${clip.id}.enc`;
+      const encryptedAudio = await encryptBytes(audioBytes, key);
+      const encryptedBlob = audioBlobFromBytes(fromBase64(encryptedAudio), 'application/octet-stream');
+
+      const { error: uploadError } = await supabase.storage
+        .from('vault-audio')
+        .upload(storagePath, encryptedBlob, {
+          contentType: 'application/octet-stream',
+          upsert: true,
+        });
+
+      if (uploadError) throw uploadError;
+    }
+
+    const metadataOnlyClip = { ...clip, audioBase64: undefined, audioBlobUrl: '' };
+    audioRows.push({
       user_id: userId,
       record_id: clip.id,
-      record_type: 'audio' as const,
-      encrypted_payload: await encryptPayload({ ...clip, audioBlobUrl: '' }, key),
+      record_type: 'audio',
+      encrypted_payload: await encryptJson(metadataOnlyClip, key),
       version: 1,
       updated_at: recordUpdatedAt(clip.createdAt),
       deleted_at: null,
-    })),
-  ]);
+      storage_path: storagePath,
+    });
+  }
+
+  const rows = [...voiceRows, ...audioRows];
 
   if (rows.length === 0) {
     throw new Error('Refusing to push an empty account vault.');
@@ -104,7 +171,7 @@ export async function pullAccountVault(): Promise<{
 
   const { data, error } = await supabase
     .from('sync_records')
-    .select('record_id,record_type,encrypted_payload,version,updated_at,deleted_at')
+    .select('record_id,record_type,encrypted_payload,version,updated_at,deleted_at,storage_path')
     .is('deleted_at', null)
     .order('updated_at', { ascending: false });
 
@@ -116,27 +183,34 @@ export async function pullAccountVault(): Promise<{
   for (const row of (data || []) as SyncRecordRow[]) {
     try {
       if (row.record_type === 'voice_profile') {
-        const voice = await decryptPayload<ClonedVoiceProfile>(row.encrypted_payload, key);
+        const voice = await decryptJson<ClonedVoiceProfile>(row.encrypted_payload, key);
         if (voice.id === row.record_id) voices.push(voice);
-      } else {
-        const clip = await decryptPayload<AudioClip>(row.encrypted_payload, key);
-        if (clip.id === row.record_id) {
-          clip.synced = true;
-          if (clip.audioBase64) {
-            try {
-              const bin = atob(clip.audioBase64);
-              const bytes = new Uint8Array(bin.length);
-              for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-              clip.audioBlobUrl = URL.createObjectURL(new Blob([bytes], { type: clip.format || 'audio/wav' }));
-            } catch {
-              clip.audioBlobUrl = '';
-            }
-          }
-          clips.push(clip);
-        }
+        continue;
       }
+
+      const clip = await decryptJson<AudioClip>(row.encrypted_payload, key);
+      if (clip.id !== row.record_id) continue;
+
+      clip.synced = true;
+
+      if (row.storage_path) {
+        const { data: encryptedFile, error: downloadError } = await supabase.storage
+          .from('vault-audio')
+          .download(row.storage_path);
+
+        if (downloadError) throw downloadError;
+
+        const encryptedBytes = new Uint8Array(await encryptedFile.arrayBuffer());
+        const decryptedAudio = await decryptBytes(toBase64(encryptedBytes), key);
+        clip.audioBase64 = toBase64(decryptedAudio);
+        clip.audioBlobUrl = URL.createObjectURL(
+          audioBlobFromBytes(decryptedAudio, clip.format || 'audio/wav')
+        );
+      }
+
+      clips.push(clip);
     } catch {
-      // Keep undecryptable records server-side; never turn them into local deletions.
+      // Keep undecryptable/inaccessible records server-side; never turn them into local deletions.
     }
   }
 
