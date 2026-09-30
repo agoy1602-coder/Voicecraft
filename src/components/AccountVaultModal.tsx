@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { getAccountState, isSupabaseConfigured, onAuthStateChange, signInWithEmail, signOutAccount, signUpWithEmail } from '../services/accountService';
+import { getAccountState, onAuthStateChange, signInWithEmail, signOutAccount, signUpWithEmail } from '../services/accountService';
+import { isSupabaseConfigured } from '../services/supabaseClient';
 import { migrateLocalVaultToAccount } from '../services/vaultMigrationService';
 import { recoverAccountVault } from '../services/vaultRecoveryService';
 import { pullAccountVault, syncAccountVault } from '../services/accountVaultSyncService';
