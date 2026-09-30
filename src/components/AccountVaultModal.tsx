@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { getAccountState, onAuthStateChange, signInWithEmail, signOutAccount, signUpWithEmail } from '../services/accountService';
 import { migrateLocalVaultToAccount } from '../services/vaultMigrationService';
 import { recoverAccountVault } from '../services/vaultRecoveryService';
-import { syncAccountVault } from '../services/accountVaultSyncService';
+import { pullAccountVault, syncAccountVault } from '../services/accountVaultSyncService';
 import { clearActiveVaultKey, hasActiveVaultKey } from '../services/vaultSession';
 import { AudioClip, ClonedVoiceProfile } from '../types';
 
@@ -51,7 +51,8 @@ export function AccountVaultModal({ isOpen, onClose, voices, clips, onRestored }
     if (!signedIn) throw new Error('Sign in first.');
     await recoverAccountVault(recoverySecret);
     const result = await syncAccountVault([], []);
-    onRestored(result.pulledVoices ? (await import('../services/accountVaultSyncService')).pullAccountVault().then(r => r.voices) : [], result.pulledClips ? (await import('../services/accountVaultSyncService')).pullAccountVault().then(r => r.clips) : []);
+    const restored = await pullAccountVault();
+    onRestored(restored.voices, restored.clips);
     setHasVault(true);
     setMessage(`Vault recovered: ${result.pulledVoices} clone(s), ${result.pulledClips} audio clip(s).`);
   });
