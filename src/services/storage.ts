@@ -188,25 +188,33 @@ class StorageService {
   }
 
   async saveClonedVoices(voices: ClonedVoiceProfile[]): Promise<void> {
-    try {
-      const db = await this.initDatabase();
-      const tx = db.transaction(STORE_VOICES, 'readwrite');
-      const store = tx.objectStore(STORE_VOICES);
-
-      // Clear existing and write updated
-      store.clear();
-      for (const voice of voices) {
+    // Encrypt everything before opening the IndexedDB transaction. Awaiting
+    // Web Crypto inside an active transaction can make the transaction
+    // inactive before store.put(), causing cloned voices to disappear after refresh.
+    const encryptedRecords = await Promise.all(
+      voices.map(async (voice) => {
         const encrypted = await cryptoService.encrypt(voice);
-        store.put({
+        return {
           id: voice.id,
           encryptedData: JSON.stringify(encrypted),
           createdAt: voice.createdAt,
           name: voice.name,
-        });
+        };
+      })
+    );
+
+    const db = await this.initDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_VOICES, 'readwrite');
+      const store = tx.objectStore(STORE_VOICES);
+      store.clear();
+      for (const record of encryptedRecords) {
+        store.put(record);
       }
-    } catch {
-      // Storage fallback
-    }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('Cloned voice storage transaction failed'));
+      tx.onabort = () => reject(tx.error || new Error('Cloned voice storage transaction aborted'));
+    });
   }
 
   async loadAudioClips(): Promise<AudioClip[]> {
@@ -307,27 +315,11 @@ class StorageService {
   }
 
   async saveSingleClip(clip: AudioClip): Promise<void> {
-    try {
-      this.memoryClipsCache = [clip, ...this.memoryClipsCache.filter((c) => c.id !== clip.id)];
-      const db = await this.initDatabase();
-      const tx = db.transaction(STORE_CLIPS, 'readwrite');
-      const store = tx.objectStore(STORE_CLIPS);
-
-      const serializableClip: AudioClip = {
-        ...clip,
-        audioBlobUrl: '',
-      };
-      const encrypted = await cryptoService.encrypt(serializableClip);
-      store.put({
-        id: clip.id,
-        encryptedData: JSON.stringify(encrypted),
-        createdAt: clip.createdAt,
-        title: clip.title,
-        audioBase64: clip.audioBase64,
-      });
-    } catch {
-      // Storage write complete
-    }
+    const current = await this.loadAudioClips();
+    const updated = [clip, ...current.filter((c) => c.id !== clip.id)]
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .slice(0, MAX_AUDIO_CLIPS);
+    await this.saveAudioClips(updated);
   }
 
   async deleteAudioClip(id: string): Promise<void> {
