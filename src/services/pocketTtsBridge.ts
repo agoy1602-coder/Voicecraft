@@ -28,6 +28,7 @@ const REQUIRED_ORT_FILES = [
 let engine: PocketTTS | null = null;
 let enginePromise: Promise<PocketTTS> | null = null;
 let loadingEngine: PocketTTS | null = null;
+let abortLoadingPromise: (() => void) | null = null;
 let hiddenAtWhileLoading: number | null = null;
 const activeVoiceRefs = new Map<string, string>();
 
@@ -139,6 +140,10 @@ async function cacheSameOriginOrtAssets(): Promise<void> {
 }
 
 function abortPendingEngineLoad(): void {
+  if (abortLoadingPromise) {
+    abortLoadingPromise();
+    abortLoadingPromise = null;
+  }
   if (loadingEngine) {
     loadingEngine.destroy();
     loadingEngine = null;
@@ -160,14 +165,24 @@ async function getEngine(onProgress?: (progress: PocketProgress) => void): Promi
   });
   loadingEngine = instance;
   enginePromise = (async () => {
-    await withTimeout(
+    const loadPromise = withTimeout(
       instance.load((progress: PocketProgress) => onProgress?.(progress)),
       ENGINE_LOAD_TIMEOUT_MS,
       'Pocket TTS model preparation timed out. Check your connection and available browser storage, then try again.',
     );
-    engine = instance;
-    loadingEngine = null;
-    return instance;
+    const abortPromise = new Promise<never>((_, reject) => {
+      abortLoadingPromise = () => {
+        reject(new Error('Pocket TTS model preparation was interrupted while the browser tab was in the background. Please press Prepare Offline Voice Engine again.'));
+      };
+    });
+    try {
+      await Promise.race([loadPromise, abortPromise]);
+      engine = instance;
+      loadingEngine = null;
+      return instance;
+    } finally {
+      abortLoadingPromise = null;
+    }
   })();
   try {
     return await enginePromise;
