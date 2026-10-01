@@ -20,7 +20,7 @@ function offlineOrtRuntimePlugin(): Plugin {
 
 function pocketTtsSessionCompatibilityPlugin(): Plugin {
   return { name: 'voicecraft-pocket-tts-session-compatibility', transform(code, id) {
-    const normalizedId = id.replace(/\\\\/g, '/');
+    const normalizedId = id.replace(/\\/g, '/');
     if (normalizedId.endsWith('/pocket-tts-js/src/index.js')) {
       const errorNeedle = 'const err = new Error(e.message || "Worker error");';
       const errorReplacement = 'const detail = [e.message, e.filename ? "file: " + e.filename : "", e.lineno ? "line: " + e.lineno : "", e.colno ? "column: " + e.colno : "", e.error?.stack || ""].filter(Boolean).join(" | ");\n            const err = new Error(detail || "Worker error");\n            console.error("[VoiceCraft] Pocket TTS worker crashed", { message: e.message, filename: e.filename, lineno: e.lineno, colno: e.colno, error: e.error });';
