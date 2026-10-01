@@ -20,7 +20,14 @@ function offlineOrtRuntimePlugin(): Plugin {
 
 function pocketTtsSessionCompatibilityPlugin(): Plugin {
   return { name: 'voicecraft-pocket-tts-session-compatibility', transform(code, id) {
-    if (!id.replace(/\\/g, '/').endsWith('/pocket-tts-js/src/worker.js')) return null;
+    const normalizedId = id.replace(/\\\\/g, '/');
+    if (normalizedId.endsWith('/pocket-tts-js/src/index.js')) {
+      const errorNeedle = 'const err = new Error(e.message || "Worker error");';
+      const errorReplacement = 'const detail = [e.message, e.filename ? "file: " + e.filename : "", e.lineno ? "line: " + e.lineno : "", e.colno ? "column: " + e.colno : "", e.error?.stack || ""].filter(Boolean).join(" | ");\n            const err = new Error(detail || "Worker error");\n            console.error("[VoiceCraft] Pocket TTS worker crashed", { message: e.message, filename: e.filename, lineno: e.lineno, colno: e.colno, error: e.error });';
+      if (!code.includes(errorNeedle)) return null;
+      return { code: code.replace(errorNeedle, errorReplacement), map: null };
+    }
+    if (!normalizedId.endsWith('/pocket-tts-js/src/worker.js')) return null;
     const needle = `async function createSession(language, name, onProgress) {\n    const bytes = await fetchWithProgress(modelUrl(language, stem(name)), name, onProgress);\n    return ort.InferenceSession.create(bytes, {\n        executionProviders: ["wasm"],\n        graphOptimizationLevel: "all",\n    });\n}`;
     if (!code.includes(needle)) return null;
     const replacement = `async function createSession(language, name, onProgress) {\n    const bytes = await fetchWithProgress(modelUrl(language, stem(name)), name, onProgress);\n    const graphOptimizationLevel = name === "mimi_encoder" ? "basic" : "all";\n    return ort.InferenceSession.create(bytes, {\n        executionProviders: ["wasm"],\n        graphOptimizationLevel,\n    });\n}`;
