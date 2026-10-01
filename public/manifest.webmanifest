@@ -1,7 +1,7 @@
 {
-  "name": "VoiceCraft AI",
-  "short_name": "VoiceCraft",
-  "description": "Neural text-to-speech and local voice cloning studio with offline synthesis.",
+  "name": "CloneVoiceTTS",
+  "short_name": "CloneVoiceTTS",
+  "description": "Text-to-speech and voice cloning studio with online and offline synthesis.",
   "start_url": "/Voicecraft/",
   "scope": "/Voicecraft/",
   "display": "standalone",
