@@ -258,9 +258,9 @@ export async function syncAccountVault(
   }
 
   const mergedVoices = Array.from(voiceMap.values());
-  const mergedClips = Array.from(clipMap.values())
-    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-    .slice(0, 5);
+  const mergedClips = Array.from(clipMap.values()).sort(
+    (a, b) => (b.createdAt || 0) - (a.createdAt || 0)
+  );
 
   if (mergedVoices.length === 0 && mergedClips.length === 0) {
     throw new Error('Account sync stopped because no recoverable local or server records exist.');
