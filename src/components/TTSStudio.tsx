@@ -91,7 +91,7 @@ export const TTSStudio: React.FC<TTSStudioProps> = ({
 
   const [studioMode, setStudioMode] = useState<'single' | 'queue'>('single');
   const [text, setText] = useState<string>(
-    'Welcome to VoiceCraft AI. Convert any written text into natural, expressive speech with custom tones, multilingual mastery, and personal voice cloning.'
+    'Welcome to CloneVoiceTTS. Convert written text into natural, expressive speech with customizable tones, multilingual support, and personal voice cloning.'
   );
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>(
     selectedVoiceForTTS?.id || PREBUILT_VOICE_PROFILES[0].id
