@@ -76,39 +76,12 @@ class StorageService {
     return this.dbPromise;
   }
 
-
   private waitForTransaction(tx: IDBTransaction): Promise<void> {
     return new Promise((resolve, reject) => {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error || new Error('IndexedDB transaction failed'));
       tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
     });
-  }
-
-  private async encryptVoiceRecords(voices: ClonedVoiceProfile[]) {
-    return Promise.all(voices.map(async (voice) => ({
-      id: voice.id,
-      encryptedData: JSON.stringify(await cryptoService.encrypt(voice)),
-      createdAt: voice.createdAt,
-      name: voice.name,
-    })));
-  }
-
-  private async encryptClipRecords(clips: AudioClip[]) {
-    return Promise.all(clips.map(async (clip) => {
-      const serializableClip: AudioClip = {
-        ...clip,
-        audioBlobUrl: '',
-      };
-      const encrypted = await cryptoService.encrypt(serializableClip);
-      return {
-        id: clip.id,
-        encryptedData: JSON.stringify(encrypted),
-        createdAt: clip.createdAt,
-        title: clip.title,
-        audioBase64: clip.audioBase64,
-      };
-    }));
   }
 
   /**
@@ -224,7 +197,12 @@ class StorageService {
   async saveClonedVoices(voices: ClonedVoiceProfile[]): Promise<void> {
     try {
       const db = await this.initDatabase();
-      const records = await this.encryptVoiceRecords(voices);
+      const records = await Promise.all(voices.map(async (voice) => ({
+        id: voice.id,
+        encryptedData: JSON.stringify(await cryptoService.encrypt(voice)),
+        createdAt: voice.createdAt,
+        name: voice.name,
+      })));
       const tx = db.transaction(STORE_VOICES, 'readwrite');
       const store = tx.objectStore(STORE_VOICES);
 
@@ -299,7 +277,20 @@ class StorageService {
     this.memoryClipsCache = clips;
     try {
       const db = await this.initDatabase();
-      const records = await this.encryptClipRecords(clips);
+      const records = await Promise.all(clips.map(async (clip) => {
+        const serializableClip: AudioClip = {
+          ...clip,
+          audioBlobUrl: '', // Will rehydrate
+        };
+        const encrypted = await cryptoService.encrypt(serializableClip);
+        return {
+          id: clip.id,
+          encryptedData: JSON.stringify(encrypted),
+          createdAt: clip.createdAt,
+          title: clip.title,
+          audioBase64: clip.audioBase64, // Keep base64 for fast retrieval
+        };
+      }));
       const tx = db.transaction(STORE_CLIPS, 'readwrite');
       const store = tx.objectStore(STORE_CLIPS);
 
