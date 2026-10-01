@@ -12,6 +12,15 @@ const STORAGE_SALT_KEY = 'voicecraft_e2ee_salt';
 const STORAGE_KEY_PHRASE = 'voicecraft_e2ee_passphrase_saved';
 
 class E2EEService {
+  private bytesToBase64(bytes: Uint8Array): string {
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  }
+
   private cryptoKey: CryptoKey | null = null;
   private salt: Uint8Array | null = null;
   private currentPassphrase: string = 'voicecraft-master-secure-vault-2026';
@@ -95,9 +104,9 @@ class E2EEService {
       dataBuffer
     );
 
-    // Convert to Base64
-    const ciphertext = btoa(String.fromCharCode(...new Uint8Array(encryptedBuffer)));
-    const ivBase64 = btoa(String.fromCharCode(...iv));
+    // Convert to Base64 in bounded chunks to support large audio payloads.
+    const ciphertext = this.bytesToBase64(new Uint8Array(encryptedBuffer));
+    const ivBase64 = this.bytesToBase64(iv);
 
     return {
       ciphertext,
