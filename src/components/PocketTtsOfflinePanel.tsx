@@ -44,7 +44,13 @@ export const PocketTtsOfflinePanel: React.FC = () => {
     } catch (error: any) {
       setPercent(0);
       setMessage(error?.message || 'Offline model preparation failed.');
-      await refresh();
+      // Refresh readiness without replacing the actionable preparation error.
+      try {
+        const next = await getPocketTtsOfflineStatus();
+        setStatus(next);
+      } catch {
+        // Keep the original preparation error visible if status inspection fails.
+      }
     } finally {
       setBusy(false);
     }
