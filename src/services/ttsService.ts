@@ -9,6 +9,16 @@ import { base64PcmToAudioBuffer, pcmToWavBlob } from './audioExport';
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || 'https://voicecraft-api.vercel.app').replace(/\/$/, '');
 const CLOUD_TIMEOUT_MS = 45000;
+async function audioBlobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length)));
+  }
+  return btoa(binary);
+}
+
 
 export interface TTSGenerateOptions {
   text: string;
@@ -111,7 +121,7 @@ class TTSService {
         const sentences = this.calculateSentenceTimings(options.text, duration);
         const blobUrl = URL.createObjectURL(decoded.wavBlob);
         const latencyMs = Math.round(performance.now() - startTime);
-        const clip: AudioClip = { id: `clip_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, title: this.generateTitle(options.text), text: options.text, voiceId: options.voice.id, voiceName: options.voice.name, voiceType: options.voice.type, tone: options.tone, language: options.language, durationSeconds: duration, audioBlobUrl: blobUrl, audioBase64: data.audioBase64, format: 'wav', sampleRate: data.sampleRate || 24000, sentences, isOfflineGenerated: false, createdAt: Date.now(), isFavorite: false, synced: false, tags: [options.tone, options.language, options.voice.name] };
+        const clip: AudioClip = { id: `clip_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, title: this.generateTitle(options.text), text: options.text, voiceId: options.voice.id, voiceName: options.voice.name, voiceType: options.voice.type, tone: options.tone, language: options.language, durationSeconds: duration, audioBlobUrl: blobUrl, audioBase64: await audioBlobToBase64(decoded.wavBlob), format: 'wav', sampleRate: data.sampleRate || 24000, sentences, isOfflineGenerated: false, createdAt: Date.now(), isFavorite: false, synced: false, tags: [options.tone, options.language, options.voice.name] };
         return { clip, audioBuffer: decoded.audioBuffer, isOffline: false, latencyMs, engine: 'gemini-cloud', requestId: data.requestId };
       }
 
