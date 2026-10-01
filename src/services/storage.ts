@@ -1,5 +1,6 @@
 import { AudioClip, ClonedVoiceProfile, UserSettings, AppNotification, ProjectPlaylist } from '../types';
 import { cryptoService } from './crypto';
+import { pcmToWavBlob } from './audioExport';
 
 const STORAGE_KEYS = {
   SETTINGS: 'voicecraft_settings',
@@ -242,16 +243,37 @@ class StorageService {
             }
 
             if (clip && clip.id) {
-              // Rehydrate blob URLs from base64 if needed
-              if (!clip.audioBlobUrl && clip.audioBase64) {
+              // Rehydrate transient blob URLs from durable Base64 audio.
+              // Older cloud-generated clips stored raw PCM, while current clips store WAV.
+              if (clip.audioBase64 && (!clip.audioBlobUrl || clip.audioBlobUrl.startsWith('blob:'))) {
                 try {
                   const binary = atob(clip.audioBase64);
                   const bytes = new Uint8Array(binary.length);
                   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                  const blob = new Blob([bytes], { type: 'audio/wav' });
-                  clip.audioBlobUrl = URL.createObjectURL(blob);
+
+                  const isWav = bytes.length >= 12
+                    && String.fromCharCode(...bytes.subarray(0, 4)) === 'RIFF'
+                    && String.fromCharCode(...bytes.subarray(8, 12)) === 'WAVE';
+
+                  // Legacy cloud clips contain raw 16-bit PCM; add a WAV header.
+                  const audioBlob = isWav
+                    ? new Blob([bytes], { type: 'audio/wav' })
+                    : pcmToWavBlob(bytes.buffer, clip.sampleRate || 24000, 1);
+
+                  clip.audioBlobUrl = URL.createObjectURL(audioBlob);
+
+                  // Normalize legacy PCM records so future saves persist a complete WAV.
+                  if (!isWav) {
+                    const wavBytes = new Uint8Array(await audioBlob.arrayBuffer());
+                    let wavBinary = '';
+                    const chunkSize = 0x8000;
+                    for (let offset = 0; offset < wavBytes.length; offset += chunkSize) {
+                      wavBinary += String.fromCharCode(...wavBytes.subarray(offset, Math.min(offset + chunkSize, wavBytes.length)));
+                    }
+                    clip.audioBase64 = btoa(wavBinary);
+                  }
                 } catch {
-                  // Ignore rehydration error
+                  // Preserve clip metadata if audio cannot be rehydrated.
                 }
               }
               clips.push(clip);
